@@ -100,9 +100,10 @@ Deno.serve(async (req: Request) => {
     const capturedAt    = igMeta.fetched_at;
 
     // ── 7. Write follower_snapshots row ──────────────────────
-    // Use the API count when it's larger than what we fetched (pagination
-    // stopped early). If the API returns a suspiciously small number (< list
-    // length), trust the list length instead — the edge endpoint is authoritative.
+    // Use whichever is larger: the API-reported count or the number of edges
+    // actually fetched. The API count is accurate when pagination stops early
+    // (big_list throttle). The list length wins if the API returns a bogus low
+    // number (the /current_user?edit=true endpoint sometimes returns wrong counts).
     const followerCount  = Math.max(igMeta.follower_count_api  ?? 0, followers.length);
     const followingCount = Math.max(igMeta.following_count_api ?? 0, following.length);
 
