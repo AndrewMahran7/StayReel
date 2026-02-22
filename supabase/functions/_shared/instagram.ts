@@ -199,13 +199,15 @@ const BACKOFF_MAX_MS  = 32_000;
 const BACKOFF_JITTER  = 1_000;
 const MAX_RETRIES     = 4;
 
-/** Polite inter-page pause: 2 500–5 000 ms randomised (reduced burst rate). */
-const PAGE_DELAY_MIN  = 2_500;
-const PAGE_DELAY_MAX  = 5_000;
+/** Polite inter-page pause: 1 500–3 000 ms randomised. */
+const PAGE_DELAY_MIN  = 1_500;
+const PAGE_DELAY_MAX  = 3_000;
 
-/** Gap between followers and following fetches (sequential, not parallel). */
-const DIRECTION_GAP_MIN = 3_000;
-const DIRECTION_GAP_MAX = 6_000;
+/** Start-delay for the second parallel direction. Separates the first page
+ *  requests so Instagram doesn't see a simultaneous burst from the same session.
+ *  Both fetches still run concurrently, keeping total time well under 150 s. */
+const DIRECTION_START_STAGGER_MIN = 8_000;
+const DIRECTION_START_STAGGER_MAX = 12_000;
 
 // ─────────────────────────────────────────────────────────────
 // Helpers
@@ -492,12 +494,16 @@ export async function fetchUserList(
     return emptyResult(fetchedAt, "USER_NOT_FOUND");
   }
 
-  // Fetch followers first, then following sequentially.
-  // Running in parallel doubles the request burst rate and triggers Instagram
-  // anti-bot throttling much sooner, cutting off pagination prematurely.
-  const followersRes = await fetchEdgeList(profile.ig_id, "followers", cookie);
-  await sleep(randomBetween(DIRECTION_GAP_MIN, DIRECTION_GAP_MAX));
-  const followingRes = await fetchEdgeList(profile.ig_id, "following", cookie);
+  // Fetch both directions in parallel but stagger the start of the second
+  // by 8–12 s. This avoids a simultaneous page-1 burst (which triggers
+  // Instagram throttling) while keeping total runtime well under the 150 s
+  // Edge Function limit.
+  const [followersRes, followingRes] = await Promise.all([
+    fetchEdgeList(profile.ig_id, "followers", cookie),
+    sleep(randomBetween(DIRECTION_START_STAGGER_MIN, DIRECTION_START_STAGGER_MAX)).then(() =>
+      fetchEdgeList(profile.ig_id, "following", cookie)
+    ),
+  ]);
 
   const stoppedEarly = !followersRes.isComplete || !followingRes.isComplete;
   const stopReason: FailureCode | null = followersRes.stopReason ?? followingRes.stopReason ?? null;
