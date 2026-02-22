@@ -1,0 +1,143 @@
+/// <reference path="../deno-types.d.ts" />
+// list-users/index.ts
+//
+// GET /list-users?ig_account_id=<uuid>&list_type=<type>&page=<n>&search=<q>
+//
+// Returns a paginated list of IgUser objects for one of the five list types.
+// For not_following_back / you_dont_follow_back, falls back to computing
+// from the latest single snapshot when no diff exists yet.
+
+import { corsPreflightResponse, jsonResponse } from "../_shared/cors.ts";
+import { errorResponse, Errors } from "../_shared/errors.ts";
+import { requireAuth, requireOwnsAccount } from "../_shared/auth.ts";
+import { adminClient } from "../_shared/supabase_client.ts";
+
+const PAGE_SIZE = 50;
+
+type ListType =
+  | "new_followers"
+  | "lost_followers"
+  | "not_following_back"
+  | "you_dont_follow_back"
+  | "you_unfollowed";
+
+const VALID_LIST_TYPES: ListType[] = [
+  "new_followers",
+  "lost_followers",
+  "not_following_back",
+  "you_dont_follow_back",
+  "you_unfollowed",
+];
+
+interface IgEdge { ig_id: string; username: string; }
+
+// Stable key: prefer numeric ig_id, fall back to @username
+function edgeKey(e: IgEdge): string {
+  return e.ig_id ? e.ig_id : `@${e.username.toLowerCase()}`;
+}
+
+function toMap(edges: IgEdge[]): Map<string, IgEdge> {
+  const m = new Map<string, IgEdge>();
+  for (const e of edges) {
+    const k = edgeKey(e);
+    if (k) m.set(k, e);
+  }
+  return m;
+}
+
+// Elements in `a` NOT present in `bMap`
+function setDiff(a: IgEdge[], bMap: Map<string, IgEdge>): IgEdge[] {
+  return a.filter((e) => !bMap.has(edgeKey(e)));
+}
+
+Deno.serve(async (req: Request) => {
+  if (req.method === "OPTIONS") return corsPreflightResponse();
+  if (req.method !== "GET") return jsonResponse({ error: "Method not allowed" }, 405);
+
+  try {
+    const caller = await requireAuth(req);
+    const url    = new URL(req.url);
+
+    const igAccountId = url.searchParams.get("ig_account_id");
+    const listTypeRaw = url.searchParams.get("list_type") ?? "not_following_back";
+    const page        = Math.max(0, parseInt(url.searchParams.get("page") ?? "0", 10));
+    const search      = (url.searchParams.get("search") ?? "").trim().toLowerCase();
+
+    if (!igAccountId) throw Errors.badRequest("ig_account_id is required.");
+    if (!VALID_LIST_TYPES.includes(listTypeRaw as ListType)) {
+      throw Errors.badRequest(`list_type must be one of: ${VALID_LIST_TYPES.join(", ")}`);
+    }
+    const listType = listTypeRaw as ListType;
+
+    await requireOwnsAccount(caller.authHeader, igAccountId);
+
+    let allItems: IgEdge[] = [];
+
+    if (listType === "not_following_back" || listType === "you_dont_follow_back") {
+      // ── Reciprocity: ALWAYS compute from latest snapshot raw JSON ──
+      // Never use the stored diff columns for these — they become wrong
+      // if either snapshot was incomplete (partial fetch).
+      const { data: snap } = await adminClient()
+        .from("follower_snapshots")
+        .select("followers_json, following_json")
+        .eq("ig_account_id", igAccountId)
+        .order("captured_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (snap) {
+        const followers: IgEdge[] = Array.isArray(snap.followers_json)
+          ? (snap.followers_json as IgEdge[])
+          : [];
+        const following: IgEdge[] = Array.isArray(snap.following_json)
+          ? (snap.following_json as IgEdge[])
+          : [];
+
+        const followersMap = toMap(followers);
+        const followingMap = toMap(following);
+
+        if (listType === "not_following_back") {
+          allItems = setDiff(following, followersMap); // you follow; they don't follow back
+        } else {
+          allItems = setDiff(followers, followingMap); // they follow you; you don't follow back
+        }
+      }
+    } else {
+      // ── Change metrics: use stored diff, only if it's complete ────
+      const { data: diffs } = await adminClient()
+        .from("diffs")
+        .select(`${listType}, is_complete`)
+        .eq("ig_account_id", igAccountId)
+        .order("to_captured_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (diffs && (diffs as Record<string, unknown>).is_complete === true) {
+        const raw = (diffs as Record<string, unknown>)[listType];
+        allItems = Array.isArray(raw) ? (raw as IgEdge[]) : [];
+      }
+      // incomplete diff or no diff → empty (needs two complete snapshots)
+    }
+
+    // ── Search filter ─────────────────────────────────────────
+    if (search) {
+      allItems = allItems.filter((u) =>
+        u.username.toLowerCase().includes(search)
+      );
+    }
+
+    // ── Paginate ──────────────────────────────────────────────
+    const start    = page * PAGE_SIZE;
+    const slice    = allItems.slice(start, start + PAGE_SIZE);
+    const nextPage = start + PAGE_SIZE < allItems.length ? page + 1 : null;
+
+    return jsonResponse({
+      items:      slice,
+      total:      allItems.length,
+      page,
+      next_page:  nextPage,
+    });
+  } catch (err) {
+    return errorResponse(err);
+  }
+});

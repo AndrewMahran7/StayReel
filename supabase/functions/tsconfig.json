@@ -1,0 +1,18 @@
+{
+  "files": [
+    "./deno-types.d.ts",
+    "./jsr-types.d.ts"
+  ],
+  "include": ["./**/*.ts"],
+  "exclude": ["../../node_modules"],
+  "compilerOptions": {
+    "target": "ESNext",
+    "lib": ["ESNext", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true
+  }
+}

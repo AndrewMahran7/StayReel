@@ -1,0 +1,78 @@
+﻿// hooks/useDashboard.ts
+// Fetches the latest diff summary for the connected IG account.
+
+import { useQuery } from '@tanstack/react-query';
+import { supabase } from '@/lib/supabase';
+import { useAuthStore } from '@/store/authStore';
+
+export interface DiffSummary {
+  // Diff identification
+  diff_id:                    string | null;
+  from_captured_at:           string | null;
+  to_captured_at:             string;
+
+  // Change metrics
+  new_followers_count:        number;
+  lost_followers_count:       number;
+  you_unfollowed_count:       number;
+  you_newly_followed_count:   number;
+  not_following_back_count:   number;
+  you_dont_follow_back_count: number;
+  net_follower_change:        number;
+  net_following_change:       number;
+
+  // Account stats (from latest snapshot)
+  follower_count:             number;
+  following_count:            number;
+  mutual_count:               number;
+
+  // Weekly summary
+  weekly_new_followers:       number;
+  weekly_lost_followers:      number;
+  weekly_net_change:          number;
+  has_weekly_summary:         boolean;
+
+  // Streak
+  current_streak_days:        number;
+  longest_streak_days:        number;
+
+  // Rate limit
+  next_snapshot_allowed_at:   string | null;
+
+  // Flags
+  is_complete:                boolean;
+  has_diff:                   boolean;
+}
+
+async function fetchDashboard(igAccountId: string): Promise<DiffSummary | null> {
+  const { data: { session } } = await supabase.auth.getSession();
+  const res = await fetch(
+    `${process.env.EXPO_PUBLIC_SUPABASE_URL}/functions/v1/diffs-latest?ig_account_id=${igAccountId}`,
+    {
+      headers: {
+        Authorization: `Bearer ${session?.access_token ?? ''}`,
+        apikey: process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY!,
+      },
+    },
+  );
+  if (res.status === 404) return null;
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err?.message ?? `HTTP ${res.status}`);
+  }
+  const json = await res.json();
+  if (!json?.to_captured_at) return null;
+  return json as DiffSummary;
+}
+
+export function useDashboard() {
+  const igAccountId = useAuthStore((s) => s.igAccountId);
+
+  return useQuery<DiffSummary | null, Error>({
+    queryKey:  ['dashboard', igAccountId],
+    queryFn:   () => fetchDashboard(igAccountId!),
+    enabled:   !!igAccountId,
+    staleTime: 60_000,
+  });
+}
+

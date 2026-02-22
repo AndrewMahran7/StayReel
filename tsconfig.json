@@ -1,0 +1,53 @@
+{
+  "extends": "expo/tsconfig.base",
+  "exclude": [
+    "node_modules",
+    "supabase/functions"
+  ],
+  "compilerOptions": {
+    "strict": true,
+    "jsx": "react-native",
+    "lib": [
+      "DOM",
+      "ESNext"
+    ],
+    "target": "ESNext",
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "resolveJsonModule": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "moduleResolution": "bundler",
+    "module": "esnext",
+    "types": [
+      "node"
+    ],
+    "baseUrl": ".",
+    "paths": {
+      "@/*": [
+        "./*"
+      ],
+      "expo-router": [
+        "./node_modules/expo-router/build/index"
+      ],
+      "@expo/vector-icons": [
+        "./node_modules/@expo/vector-icons/build/Icons"
+      ],
+      "@tanstack/react-query": [
+        "./node_modules/@tanstack/react-query/build/legacy/index"
+      ],
+      "@react-native-async-storage/async-storage": [
+        "./node_modules/@react-native-async-storage/async-storage/lib/typescript/index"
+      ],
+      "expo-status-bar": [
+        "./node_modules/expo-status-bar/build/StatusBar"
+      ]
+    }
+  },
+  "include": [
+    "**/*.ts",
+    "**/*.tsx",
+    ".expo/types/**/*.ts",
+    "expo-env.d.ts"
+  ]
+}

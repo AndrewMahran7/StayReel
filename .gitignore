@@ -1,0 +1,55 @@
+# Node modules
+node_modules/
+
+# Expo
+.expo/
+.expo-shared/
+web-build/
+
+# Build output
+dist/
+build/
+ios/build/
+android/build/
+
+# Metro cache
+.metro-cache/
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+*.log
+
+# Environment variables
+.env
+.env.*
+!.env.example
+
+# Supabase
+.supabase/
+
+# Local DB files
+*.sqlite
+*.db
+
+# Instagram session temp files
+sessions/
+cookies/
+snapshots/
+
+# Mac files
+.DS_Store
+
+# VSCode
+.vscode/
+
+# IntelliJ
+.idea/
+
+# Coverage
+coverage/
+
+# Temporary files
+*.tmp
+*.temp
