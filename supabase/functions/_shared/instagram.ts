@@ -441,7 +441,37 @@ async function fetchEdgeList(
     if (!nextMaxId) {
       const bigList = Boolean(result.body.big_list);
       if (bigList) {
-        console.warn(`[ig] ${direction} page ${page}: big_list=true but no cursor — stopping at ${edges.length} edges`);
+        // Log full response keys so we can diagnose what Instagram is returning
+        const bodyKeys = Object.keys(result.body).join(", ");
+        console.warn(`[ig] ${direction} page ${page}: big_list=true, no cursor. Body keys: ${bodyKeys}`);
+
+        // Big-list retry: wait 10–15 s and replay with a fresh rank_token.
+        // Instagram sometimes withholds the cursor on one response but gives it
+        // back on a retry from the same position.
+        if (page < MAX_PAGES) {
+          const freshToken = newRankToken(igUserId);
+          await sleep(randomBetween(10_000, 15_000));
+
+          const retryQs = new URLSearchParams({ count: String(PAGE_SIZE) });
+          retryQs.set("rank_token", freshToken);
+          // Use the last cursor we had (nextMaxId is null here, so omit max_id —
+          // this re-fetches relative to the last known offset via rank_token).
+          const retryUrl = `${IG_API}/friendships/${igUserId}/${direction}/?${retryQs.toString()}`;
+          const retryResult = await igGetWithRetry(retryUrl, cookie);
+          if (retryResult.ok) {
+            const retryCursor = retryResult.body.next_max_id
+              ?? (retryResult.body.page_info as Record<string, unknown> | undefined)?.end_cursor
+              ?? null;
+            if (retryCursor && String(retryCursor).length > 0 && retryCursor !== "0" && retryCursor !== 0) {
+              console.log(`[ig] ${direction} page ${page}: big_list retry succeeded, got cursor`);
+              nextMaxId = String(retryCursor);
+              // Don't stop — continue the loop with the new cursor
+              await sleep(randomBetween(PAGE_DELAY_MIN, PAGE_DELAY_MAX));
+              continue;
+            }
+          }
+          console.warn(`[ig] ${direction} page ${page}: big_list retry also had no cursor — stopping at ${edges.length} edges`);
+        }
       } else {
         console.log(`[ig] ${direction} page ${page}: no cursor, list complete at ${edges.length} edges`);
       }
