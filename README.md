@@ -126,7 +126,7 @@ eas build --profile production --platform all
    ```json
    "plugins": [
      ["react-native-google-mobile-ads", {
-       "iosAppId": "ca-app-pub-XXXX~YYYY",
+       "iosAppId": "ca-app-pub-6049273265076763~7693569711",
        "androidAppId": "ca-app-pub-XXXX~YYYY"
      }]
    ]

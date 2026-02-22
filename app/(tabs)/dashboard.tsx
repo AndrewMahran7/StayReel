@@ -18,7 +18,6 @@ import { Ionicons } from '@expo/vector-icons';
 
 import { useDashboard }                        from '@/hooks/useDashboard';
 import { useSnapshotCapture, SnapshotLimitError } from '@/hooks/useSnapshotCapture';
-import { useInterstitialAd }                   from '@/hooks/useInterstitialAd';
 import { DashboardCard }                       from '@/components/DashboardCard';
 import { BannerAdView }                        from '@/components/BannerAdView';
 import { StatsRow }                            from '@/components/StatsRow';
@@ -75,7 +74,6 @@ export default function DashboardScreen() {
   const router                                 = useRouter();
   const { data, isLoading, refetch, isRefetching, error } = useDashboard();
   const capture                                = useSnapshotCapture();
-  const { showIfReady }                        = useInterstitialAd();
   const [capturing, setCapturing]              = useState(false);
   const setPendingListType                     = useAuthStore((s) => s.setPendingListType);
 
@@ -97,7 +95,6 @@ export default function DashboardScreen() {
     setCapturing(true);
     try {
       await capture.mutateAsync();
-      showIfReady();
       setOverrideNextAt(null);
     } catch (err: any) {
       if (err instanceof SnapshotLimitError) {

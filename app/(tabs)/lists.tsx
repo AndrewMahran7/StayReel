@@ -1,6 +1,5 @@
 // app/(tabs)/lists.tsx
 // Searchable, paginated user list.
-// Interstitial shown every 3rd list-type toggle.
 
 import React, { useCallback, useEffect, useState } from 'react';
 import {
@@ -16,8 +15,6 @@ import { useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 
 import { useListData, type ListType, type IgUser } from '@/hooks/useListData';
-import { useInterstitialAd } from '@/hooks/useInterstitialAd';
-import { useAdStore, INTERSTITIAL_EVERY_N_OPENS } from '@/store/adStore';
 import { useAuthStore } from '@/store/authStore';
 import { SearchBar } from '@/components/SearchBar';
 import { UserListItem } from '@/components/UserListItem';
@@ -52,9 +49,6 @@ export default function ListsScreen() {
     }
   }, [pendingListType]);
 
-  const { showIfReady }          = useInterstitialAd();
-  const { incrementListOpens }   = useAdStore();
-
   const {
     data,
     fetchNextPage,
@@ -64,17 +58,11 @@ export default function ListsScreen() {
     error,
   } = useListData(activeType, search);
 
-  // Switch list type with interstitial frequency cap
-  const handleTabPress = useCallback(async (type: ListType) => {
+  const handleTabPress = useCallback((type: ListType) => {
     if (type === activeType) return;
     setActiveType(type);
     setSearch('');
-
-    const count = await incrementListOpens();
-    if (count % INTERSTITIAL_EVERY_N_OPENS === 0) {
-      showIfReady();
-    }
-  }, [activeType, incrementListOpens, showIfReady]);
+  }, [activeType]);
 
   const items: IgUser[] = data?.pages.flatMap((p: { items: IgUser[] }) => p.items) ?? [];
 

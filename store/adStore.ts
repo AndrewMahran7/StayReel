@@ -30,7 +30,6 @@ export interface AdState {
 // Computed on read so it's always current regardless of Zustand
 // shallow-merge semantics (which would discard a JS getter on set()).
 export function selectAdsActive(s: AdState): boolean {
-  if (s.consentStatus === 'unknown') return false;
   if (s.adsRemovedUntil && Date.now() < s.adsRemovedUntil) return false;
   return true;
 }

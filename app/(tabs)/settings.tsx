@@ -11,7 +11,6 @@ import {
   ScrollView,
   ActivityIndicator,
   Linking,
-  Switch,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -19,14 +18,14 @@ import { useQueryClient } from '@tanstack/react-query';
 
 import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/store/authStore';
-import { useAdStore, selectAdsActive } from '@/store/adStore';
+import { useAdStore } from '@/store/adStore';
 import { RemoveAdsSheet } from '@/components/RemoveAdsSheet';
 import C from '@/lib/colors';
 
 export default function SettingsScreen() {
   const { user, igAccountId, setSession, setIgAccountId } = useAuthStore();
-  const { adsRemovedUntil, consentStatus, setConsentStatus } = useAdStore();
-  const adsActive = useAdStore(selectAdsActive);
+  const { adsRemovedUntil } = useAdStore();
+  const adsActive = !adsRemovedUntil || Date.now() >= adsRemovedUntil;
   const qc = useQueryClient();
 
   const [disconnecting, setDisconnecting] = useState(false);
@@ -101,11 +100,6 @@ export default function SettingsScreen() {
     qc.clear();
   };
 
-  // ── Consent toggle ────────────────────────────────────────
-  const toggleConsent = (value: boolean) => {
-    setConsentStatus(value ? 'granted' : 'denied');
-  };
-
   const adsRemovedLabel = (() => {
     if (!adsRemovedUntil || Date.now() >= adsRemovedUntil) return null;
     const d = new Date(adsRemovedUntil);
@@ -167,26 +161,6 @@ export default function SettingsScreen() {
           />
         )}
 
-        {consentStatus !== 'unknown' && (
-          <View style={styles.row}>
-            <View style={[styles.iconWrap, { backgroundColor: C.tealDim }]}>
-              <Ionicons name="eye-off-outline" size={18} color={C.teal} />
-            </View>
-            <View style={styles.rowBody}>
-              <Text style={styles.rowTitle}>Personalised ads</Text>
-              <Text style={styles.rowSub}>
-                {consentStatus === 'granted' ? 'Enabled' : 'Disabled (non-personalised)'}
-              </Text>
-            </View>
-            <Switch
-              value={consentStatus === 'granted'}
-              onValueChange={toggleConsent}
-              trackColor={{ false: C.border, true: C.accentDim }}
-              thumbColor={consentStatus === 'granted' ? C.accent : C.textMuted}
-            />
-          </View>
-        )}
-
         {/* Privacy section */}
         <SectionHeader title="Privacy" />
 
@@ -194,14 +168,14 @@ export default function SettingsScreen() {
           icon="document-text-outline"
           iconColor={C.textSecondary}
           title="Privacy Policy"
-          onPress={() => Linking.openURL('https://example.com/privacy')}
+          onPress={() => Linking.openURL('https://andrewmahran7.github.io/stayreel-legal/privacy')}
         />
 
         <ActionRow
           icon="newspaper-outline"
           iconColor={C.textSecondary}
           title="Terms of Service"
-          onPress={() => Linking.openURL('https://example.com/terms')}
+          onPress={() => Linking.openURL('https://andrewmahran7.github.io/stayreel-legal/terms')}
         />
 
         {/* Danger zone */}

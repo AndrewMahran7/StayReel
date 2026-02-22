@@ -13,7 +13,6 @@ import { supabase, handleAuthDeepLink } from '@/lib/supabase';
 import { queryClient } from '@/lib/queryClient';
 import { useAuthStore } from '@/store/authStore';
 import { useAdStore } from '@/store/adStore';
-import { ConsentModal } from '@/components/ConsentModal';
 
 function AuthGuard() {
   const router     = useRouter();
@@ -100,7 +99,6 @@ export default function RootLayout() {
       <SafeAreaProvider>
         <StatusBar style="light" />
         <AuthGuard />
-        <ConsentModal />
         <Stack screenOptions={{ headerShown: false }}>
           <Stack.Screen name="(auth)" />
           <Stack.Screen name="(tabs)" />

@@ -94,13 +94,13 @@ You have the right to:
 - **Disconnect** your Instagram account at any time, which removes your stored session token
 - **Opt out** of non-essential communications
 
-To exercise these rights, contact us at **support@stayreel.app**.
+To exercise these rights, contact us at **mahranandrew@gmail.com**.
 
 ---
 
 ## 8. Children's Privacy
 
-StayReel is not intended for users under the age of 13. We do not knowingly collect personal information from children under 13. If we become aware that a child under 13 has provided us with personal information, we will delete it promptly. If you believe a child under 13 has used our App, please contact us at **support@stayreel.app**.
+StayReel is not intended for users under the age of 13. We do not knowingly collect personal information from children under 13. If we become aware that a child under 13 has provided us with personal information, we will delete it promptly. If you believe a child under 13 has used our App, please contact us at **mahranandrew@gmail.com**.
 
 ---
 
@@ -122,4 +122,4 @@ We may update this Privacy Policy from time to time. When we do, we will update 
 
 If you have questions or concerns about this Privacy Policy, contact us at:
 
-**support@stayreel.app**
+**mahranandrew@gmail.com**

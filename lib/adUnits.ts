@@ -20,12 +20,12 @@ const TEST_REWARDED_ANDROID        = 'ca-app-pub-3940256099942544/5224354917';
 // ── Your production unit IDs ──────────────────────────────────
 // Replace with real IDs from AdMob console before going live.
 
-const REAL_BANNER_IOS              = 'ca-app-pub-XXXXXXXXXXXXXXXX/YYYYYYYYYY';
-const REAL_BANNER_ANDROID          = 'ca-app-pub-XXXXXXXXXXXXXXXX/YYYYYYYYYY';
-const REAL_INTERSTITIAL_IOS        = 'ca-app-pub-XXXXXXXXXXXXXXXX/YYYYYYYYYY';
-const REAL_INTERSTITIAL_ANDROID    = 'ca-app-pub-XXXXXXXXXXXXXXXX/YYYYYYYYYY';
-const REAL_REWARDED_IOS            = 'ca-app-pub-XXXXXXXXXXXXXXXX/YYYYYYYYYY';
-const REAL_REWARDED_ANDROID        = 'ca-app-pub-XXXXXXXXXXXXXXXX/YYYYYYYYYY';
+const REAL_BANNER_IOS              = 'ca-app-pub-XXXXXXXXXXXXXXXX/YYYYYYYYYY'; // 'ca-app-pub-6049273265076763/6459874513';
+const REAL_BANNER_ANDROID          = 'ca-app-pub-XXXXXXXXXXXXXXXX/YYYYYYYYYY'; // Don't have android set up yet
+const REAL_INTERSTITIAL_IOS        = 'ca-app-pub-XXXXXXXXXXXXXXXX/YYYYYYYYYY'; // Don't want intersititial ads
+const REAL_INTERSTITIAL_ANDROID    = 'ca-app-pub-XXXXXXXXXXXXXXXX/YYYYYYYYYY'; // Don't want intersititial ads
+const REAL_REWARDED_IOS            = 'ca-app-pub-XXXXXXXXXXXXXXXX/YYYYYYYYYY'; // 'ca-app-pub-6049273265076763/5071275801';
+const REAL_REWARDED_ANDROID        = 'ca-app-pub-XXXXXXXXXXXXXXXX/YYYYYYYYYY'; // Don't have android set up yet
 
 // ── Resolvers ─────────────────────────────────────────────────
 

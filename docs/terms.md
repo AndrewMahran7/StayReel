@@ -39,7 +39,7 @@ You must be at least 13 years old to use StayReel. By using the App, you represe
 
 ## 5. Your Account
 
-You are responsible for maintaining the security of your StayReel account credentials. You are responsible for all activity that occurs under your account. Notify us immediately at **support@stayreel.app** if you suspect unauthorized access.
+You are responsible for maintaining the security of your StayReel account credentials. You are responsible for all activity that occurs under your account. Notify us immediately at **mahranandrew@gmail.com** if you suspect unauthorized access.
 
 ---
 
@@ -145,4 +145,4 @@ These Terms, together with our Privacy Policy, constitute the entire agreement b
 
 For questions about these Terms, contact us at:
 
-**support@stayreel.app**
+**mahranandrew@gmail.com**
