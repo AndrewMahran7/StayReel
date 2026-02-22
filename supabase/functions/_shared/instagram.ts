@@ -187,8 +187,8 @@ export interface FetchResult {
 const IG_API = "https://i.instagram.com/api/v1";
 const IG_APP_ID = "936619743392459";
 const USER_AGENT =
-  "Instagram 275.0.0.27.98 Android (26/8.0.0; 480dpi; 1080x1920; " +
-  "OnePlus; ONEPLUS A5000; OnePlus5; qcom; en_US; 314665256)";
+  "Instagram 314.0.0.35.109 Android (26/8.0.0; 480dpi; 1080x1920; " +
+  "OnePlus; ONEPLUS A5000; OnePlus5; qcom; en_US; 556543836)";
 
 /** Hard page cap per direction per run. 20 pages × 200 items = 4 000 max. */
 const MAX_PAGES = 20;
@@ -199,9 +199,13 @@ const BACKOFF_MAX_MS  = 32_000;
 const BACKOFF_JITTER  = 1_000;
 const MAX_RETRIES     = 4;
 
-/** Polite inter-page pause: 1 500–3 000 ms randomised. */
-const PAGE_DELAY_MIN  = 1_500;
-const PAGE_DELAY_MAX  = 3_000;
+/** Polite inter-page pause: 2 500–5 000 ms randomised (reduced burst rate). */
+const PAGE_DELAY_MIN  = 2_500;
+const PAGE_DELAY_MAX  = 5_000;
+
+/** Gap between followers and following fetches (sequential, not parallel). */
+const DIRECTION_GAP_MIN = 3_000;
+const DIRECTION_GAP_MAX = 6_000;
 
 // ─────────────────────────────────────────────────────────────
 // Helpers
@@ -372,13 +376,16 @@ interface EdgeListResult {
   stopReason: FailureCode | null;
 }
 
-// Generate a fresh UUID-style rank_token per fetch session.
-// Instagram's followers endpoint requires this for pagination beyond
-// the first page. Without it the API returns only the most recent
-// followers and reports no next_max_id even when more exist.
-function newRankToken(): string {
-  // Deno exposes crypto.randomUUID() — produces standard UUID v4
-  return (crypto as unknown as { randomUUID: () => string }).randomUUID();
+// Generate a rank_token in the format Instagram's app uses: {igUserId}_{randomHex}
+// This format is required for stable pagination on big_list accounts.
+// Passing the wrong format causes Instagram to truncate results after 1–2 pages.
+function newRankToken(igUserId: string): string {
+  const hex = Array.from(
+    (crypto as unknown as { getRandomValues: (a: Uint8Array) => Uint8Array })
+      .getRandomValues(new Uint8Array(16)),
+    (b) => b.toString(16).padStart(2, "0"),
+  ).join("");
+  return `${igUserId}_${hex}`;
 }
 
 async function fetchEdgeList(
@@ -389,8 +396,8 @@ async function fetchEdgeList(
   const edges: IgEdge[] = [];
   let nextMaxId: string | null = null;
   let page = 0;
-  // One stable token per list fetch — consistent across pages
-  const rankToken = newRankToken();
+  // rank_token must include the user ID — required for big_list account pagination
+  const rankToken = newRankToken(igUserId);
 
   while (page < MAX_PAGES) {
     const qs = new URLSearchParams({ count: String(PAGE_SIZE) });
@@ -415,9 +422,14 @@ async function fetchEdgeList(
     }
 
     page++;
+    console.log(`[ig] ${direction} page ${page}: got ${users.length} users (total ${edges.length}), big_list=${result.body.big_list ?? false}`);
 
-    // next_max_id may be a string or number — treat 0 / "" / null / undefined as done.
-    const rawCursor = result.body.next_max_id;
+    // Resolve next cursor — check next_max_id first, then page_info.end_cursor
+    // (big_list accounts sometimes use the latter).
+    const rawCursor = result.body.next_max_id
+      ?? (result.body.page_info as Record<string, unknown> | undefined)?.end_cursor
+      ?? null;
+
     if (rawCursor !== null && rawCursor !== undefined && String(rawCursor).length > 0 && rawCursor !== "0" && rawCursor !== 0) {
       nextMaxId = String(rawCursor);
     } else {
@@ -427,7 +439,9 @@ async function fetchEdgeList(
     if (!nextMaxId) {
       const bigList = Boolean(result.body.big_list);
       if (bigList) {
-        console.warn(`[ig] ${direction} page ${page}: big_list=true but no next_max_id — stopping at ${edges.length} edges`);
+        console.warn(`[ig] ${direction} page ${page}: big_list=true but no cursor — stopping at ${edges.length} edges`);
+      } else {
+        console.log(`[ig] ${direction} page ${page}: no cursor, list complete at ${edges.length} edges`);
       }
       return { edges, pagesFetched: page, isComplete: !bigList, stopReason: bigList ? "PAGE_LIMIT_REACHED" : null };
     }
@@ -478,13 +492,12 @@ export async function fetchUserList(
     return emptyResult(fetchedAt, "USER_NOT_FOUND");
   }
 
-  // Fetch both directions; stagger start by 200–500 ms
-  const [followersRes, followingRes] = await Promise.all([
-    fetchEdgeList(profile.ig_id, "followers", cookie),
-    sleep(randomBetween(200, 500)).then(() =>
-      fetchEdgeList(profile.ig_id, "following", cookie)
-    ),
-  ]);
+  // Fetch followers first, then following sequentially.
+  // Running in parallel doubles the request burst rate and triggers Instagram
+  // anti-bot throttling much sooner, cutting off pagination prematurely.
+  const followersRes = await fetchEdgeList(profile.ig_id, "followers", cookie);
+  await sleep(randomBetween(DIRECTION_GAP_MIN, DIRECTION_GAP_MAX));
+  const followingRes = await fetchEdgeList(profile.ig_id, "following", cookie);
 
   const stoppedEarly = !followersRes.isComplete || !followingRes.isComplete;
   const stopReason: FailureCode | null = followersRes.stopReason ?? followingRes.stopReason ?? null;
