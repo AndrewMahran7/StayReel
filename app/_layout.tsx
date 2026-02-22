@@ -100,6 +100,7 @@ export default function RootLayout() {
         <StatusBar style="light" />
         <AuthGuard />
         <Stack screenOptions={{ headerShown: false }}>
+          <Stack.Screen name="auth" />
           <Stack.Screen name="(auth)" />
           <Stack.Screen name="(tabs)" />
         </Stack>
