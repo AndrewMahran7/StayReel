@@ -190,8 +190,10 @@ const USER_AGENT =
   "Instagram 314.0.0.35.109 Android (26/8.0.0; 480dpi; 1080x1920; " +
   "OnePlus; ONEPLUS A5000; OnePlus5; qcom; en_US; 556543836)";
 
-/** Hard page cap per direction per run. 20 pages × 200 items = 4 000 max. */
-const MAX_PAGES = 20;
+/** Hard page cap per direction per run.
+ *  big_list accounts return ~20 users/page on the followers endpoint,
+ *  so 800 followers needs ~40 pages. 60 handles up to ~1 200 followers. */
+const MAX_PAGES = 60;
 const PAGE_SIZE = 200;
 
 const BACKOFF_BASE_MS = 2_000;
@@ -199,9 +201,9 @@ const BACKOFF_MAX_MS  = 32_000;
 const BACKOFF_JITTER  = 1_000;
 const MAX_RETRIES     = 4;
 
-/** Polite inter-page pause: 1 500–3 000 ms randomised. */
-const PAGE_DELAY_MIN  = 1_500;
-const PAGE_DELAY_MAX  = 3_000;
+/** Polite inter-page pause: 1 000–2 000 ms randomised. */
+const PAGE_DELAY_MIN  = 1_000;
+const PAGE_DELAY_MAX  = 2_000;
 
 /** Start-delay for the second parallel direction. Separates the first page
  *  requests so Instagram doesn't see a simultaneous burst from the same session.
