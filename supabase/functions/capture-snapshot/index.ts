@@ -100,10 +100,11 @@ Deno.serve(async (req: Request) => {
     const capturedAt    = igMeta.fetched_at;
 
     // ── 7. Write follower_snapshots row ──────────────────────
-    // Prefer the count returned by the profile API (always accurate) over
-    // followers.length, which can be lower when pagination stops early.
-    const followerCount  = igMeta.follower_count_api  > 0 ? igMeta.follower_count_api  : followers.length;
-    const followingCount = igMeta.following_count_api > 0 ? igMeta.following_count_api : following.length;
+    // Use the API count when it's larger than what we fetched (pagination
+    // stopped early). If the API returns a suspiciously small number (< list
+    // length), trust the list length instead — the edge endpoint is authoritative.
+    const followerCount  = Math.max(igMeta.follower_count_api  ?? 0, followers.length);
+    const followingCount = Math.max(igMeta.following_count_api ?? 0, following.length);
 
     // Mutual count: users present in both followers and following
     const followerKeySet = new Set(
