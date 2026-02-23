@@ -185,7 +185,15 @@ export default function DashboardScreen() {
             {capturing || capture.isPending ? (
               <>
                 <ActivityIndicator size="small" color="#fff" />
-                <Text style={styles.captureBtnText}>{progressLabel(capture.progress)}</Text>
+                <Text style={styles.captureBtnText}>
+                  {capture.progress.phase === 'followers'
+                    ? `Followers ${capture.progress.followersSeen}…`
+                    : capture.progress.phase === 'following'
+                    ? `Following ${capture.progress.followingSeen}…`
+                    : capture.progress.phase === 'finalize'
+                    ? 'Saving…'
+                    : 'Starting…'}
+                </Text>
               </>
             ) : isLimited ? (
               <>
