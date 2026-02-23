@@ -22,13 +22,17 @@ import { supabase } from '@/lib/supabase';
 import C from '@/lib/colors';
 
 export default function SignInScreen() {
-  const [email,    setEmail]    = useState('');
-  const [loading,  setLoading]  = useState(false);
-  const [sent,     setSent]     = useState(false);
+  const [email,       setEmail]       = useState('');
+  const [password,    setPassword]    = useState('');
+  const [loading,     setLoading]     = useState(false);
+  const [sent,        setSent]        = useState(false);
 
   const DEV_EMAIL    = process.env.EXPO_PUBLIC_DEV_EMAIL;
-  const DEV_PASSWORD  = process.env.EXPO_PUBLIC_DEV_PASSWORD;
+  const DEV_PASSWORD = process.env.EXPO_PUBLIC_DEV_PASSWORD;
   const showDevBypass = __DEV__ && !!DEV_EMAIL && !!DEV_PASSWORD;
+
+  // True when the typed email matches the backdoor address
+  const isDevEmail = !!DEV_EMAIL && email.trim().toLowerCase() === DEV_EMAIL.toLowerCase();
 
   const handleDevLogin = async () => {
     setLoading(true);
@@ -48,13 +52,17 @@ export default function SignInScreen() {
     }
 
     // ── App Store review backdoor ──────────────────────────────
-    // If the reviewer enters the designated test email, sign in
-    // with password directly instead of sending a magic link.
+    // If the reviewer enters the designated test email, require the
+    // matching password before signing in (no magic link sent).
     if (DEV_EMAIL && DEV_PASSWORD && trimmed === DEV_EMAIL.toLowerCase()) {
+      if (!password) {
+        // Password field is now visible — just focus it, don't submit yet.
+        return;
+      }
       setLoading(true);
       const { error } = await supabase.auth.signInWithPassword({
         email:    DEV_EMAIL,
-        password: DEV_PASSWORD,
+        password: password,
       });
       setLoading(false);
       if (error) Alert.alert('Sign in failed', error.message);
@@ -118,24 +126,43 @@ export default function SignInScreen() {
               <TextInput
                 style={styles.input}
                 value={email}
-                onChangeText={setEmail}
+                onChangeText={(v) => { setEmail(v); setPassword(''); }}
                 placeholder="you@example.com"
                 placeholderTextColor={C.textMuted}
                 keyboardType="email-address"
                 autoCapitalize="none"
                 autoCorrect={false}
-                returnKeyType="send"
-                onSubmitEditing={handleSend}
+                returnKeyType={isDevEmail ? 'next' : 'send'}
+                onSubmitEditing={isDevEmail ? undefined : handleSend}
               />
 
+              {/* Password field — only shown for the backdoor email */}
+              {isDevEmail && (
+                <>
+                  <Text style={styles.label}>Password</Text>
+                  <TextInput
+                    style={styles.input}
+                    value={password}
+                    onChangeText={setPassword}
+                    placeholder="Enter password"
+                    placeholderTextColor={C.textMuted}
+                    secureTextEntry
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    returnKeyType="go"
+                    onSubmitEditing={handleSend}
+                  />
+                </>
+              )}
+
               <TouchableOpacity
-                style={[styles.btn, loading && styles.btnDisabled]}
+                style={[styles.btn, (loading || (isDevEmail && !password)) && styles.btnDisabled]}
                 onPress={handleSend}
-                disabled={loading}
+                disabled={loading || (isDevEmail && !password)}
               >
                 {loading
                   ? <ActivityIndicator color="#fff" />
-                  : <Text style={styles.btnText}>Send magic link</Text>
+                  : <Text style={styles.btnText}>{isDevEmail ? 'Sign in' : 'Send magic link'}</Text>
                 }
               </TouchableOpacity>
 
