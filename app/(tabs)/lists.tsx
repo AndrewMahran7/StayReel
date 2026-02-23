@@ -15,10 +15,11 @@ import { useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 
 import { useListData, type ListType, type IgUser } from '@/hooks/useListData';
-import { useAuthStore } from '@/store/authStore';
-import { SearchBar } from '@/components/SearchBar';
-import { UserListItem } from '@/components/UserListItem';
-import { BannerAdView } from '@/components/BannerAdView';
+import { useAuthStore }    from '@/store/authStore';
+import { useUnfollowUser } from '@/hooks/useUnfollowUser';
+import { SearchBar }       from '@/components/SearchBar';
+import { UserListItem }    from '@/components/UserListItem';
+import { BannerAdView }    from '@/components/BannerAdView';
 import C from '@/lib/colors';
 
 const TABS: { key: ListType; label: string }[] = [
@@ -57,6 +58,9 @@ export default function ListsScreen() {
     isLoading,
     error,
   } = useListData(activeType, search);
+
+  const igAccountId = useAuthStore((s) => s.igAccountId);
+  const { unfollow, unfollowed, pendingId } = useUnfollowUser();
 
   const handleTabPress = useCallback((type: ListType) => {
     if (type === activeType) return;
@@ -118,7 +122,17 @@ export default function ListsScreen() {
         data={items}
         keyExtractor={(u, i) => u.ig_id || u.username + i}
         renderItem={({ item, index }) => (
-          <UserListItem user={item} index={index} />
+          <UserListItem
+            user={item}
+            index={index}
+            onUnfollow={
+              activeType === 'not_following_back' && igAccountId
+                ? (igId) => unfollow(igAccountId, igId)
+                : undefined
+            }
+            unfollowPending={pendingId === item.ig_id}
+            unfollowDone={unfollowed.has(item.ig_id)}
+          />
         )}
         ListEmptyComponent={
           !isLoading ? (

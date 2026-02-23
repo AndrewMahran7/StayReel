@@ -113,7 +113,7 @@ export function GrowthChart() {
       ) : !snaps || snaps.length < 2 ? (
         <View style={styles.emptyBox}>
           <Text style={styles.emptyText}>Not enough data yet</Text>
-          <Text style={styles.emptySubtext}>Daily snapshots will populate this chart</Text>
+          <Text style={styles.emptySubtext}>Snapshots will populate this chart</Text>
         </View>
       ) : (
         <Svg width={CHART_W} height={CHART_H}>

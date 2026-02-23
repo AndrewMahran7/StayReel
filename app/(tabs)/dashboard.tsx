@@ -203,7 +203,7 @@ export default function DashboardScreen() {
             ) : (
               <>
                 <Ionicons name="camera-outline" size={16} color="#fff" />
-                <Text style={styles.captureBtnText}>Daily Snapshot</Text>
+                <Text style={styles.captureBtnText}>Take Snapshot</Text>
               </>
             )}
           </TouchableOpacity>
@@ -350,7 +350,7 @@ export default function DashboardScreen() {
           <View style={styles.hintBox}>
             <Ionicons name="information-circle-outline" size={16} color={C.textMuted} />
             <Text style={styles.hintText}>
-              Come back tomorrow for your first Daily Snapshot comparison.
+              Come back in an hour for your first snapshot comparison.
             </Text>
           </View>
         )}
@@ -362,7 +362,7 @@ export default function DashboardScreen() {
             <Text style={styles.emptyTitle}>No data yet</Text>
             <Text style={styles.emptyBody}>
               Tap{' '}
-              <Text style={styles.emptyBold}>Daily Snapshot</Text>
+              <Text style={styles.emptyBold}>Take Snapshot</Text>
               {' '}to capture your first snapshot and start tracking your growth.
             </Text>
           </View>

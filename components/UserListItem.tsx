@@ -1,7 +1,10 @@
 // components/UserListItem.tsx
 
 import React, { useState } from 'react';
-import { View, Text, TouchableOpacity, Image, StyleSheet, Linking } from 'react-native';
+import {
+  View, Text, TouchableOpacity, Image, StyleSheet,
+  Linking, ActivityIndicator,
+} from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import C from '@/lib/colors';
 import type { IgUser } from '@/hooks/useListData';
@@ -15,11 +18,17 @@ function avatarColor(username: string): string {
 }
 
 interface Props {
-  user:  IgUser;
-  index: number;
+  user:        IgUser;
+  index:       number;
+  /** When provided, an Unfollow button is shown for this row. */
+  onUnfollow?:  (igId: string) => void;
+  /** Whether this specific user's unfollow is currently in-flight. */
+  unfollowPending?: boolean;
+  /** Whether this user has already been unfollowed this session. */
+  unfollowDone?:    boolean;
 }
 
-export function UserListItem({ user }: Props) {
+export function UserListItem({ user, onUnfollow, unfollowPending, unfollowDone }: Props) {
   const [imgError, setImgError] = useState(false);
 
   const openProfile = () => {
@@ -49,7 +58,28 @@ export function UserListItem({ user }: Props) {
         </Text>
       </View>
 
-      <Ionicons name="open-outline" size={15} color={C.textMuted} />
+      {onUnfollow ? (
+        <TouchableOpacity
+          style={[
+            styles.unfollowBtn,
+            unfollowDone && styles.unfollowBtnDone,
+          ]}
+          onPress={() => !unfollowDone && onUnfollow(user.ig_id)}
+          disabled={unfollowPending || unfollowDone}
+          activeOpacity={0.7}
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+        >
+          {unfollowPending ? (
+            <ActivityIndicator size="small" color={C.accent} />
+          ) : unfollowDone ? (
+            <Text style={styles.unfollowBtnDoneText}>Unfollowed</Text>
+          ) : (
+            <Text style={styles.unfollowBtnText}>Unfollow</Text>
+          )}
+        </TouchableOpacity>
+      ) : (
+        <Ionicons name="open-outline" size={15} color={C.textMuted} />
+      )}
     </TouchableOpacity>
   );
 }
@@ -89,5 +119,28 @@ const styles = StyleSheet.create({
   username: {
     color:    C.textPrimary,
     fontSize: 15,
+  },
+  unfollowBtn: {
+    paddingVertical:   5,
+    paddingHorizontal: 12,
+    borderRadius:      14,
+    borderWidth:       1,
+    borderColor:       C.accent,
+    minWidth:          80,
+    alignItems:        'center',
+    justifyContent:    'center',
+  },
+  unfollowBtnDone: {
+    borderColor: C.border,
+  },
+  unfollowBtnText: {
+    color:      C.accent,
+    fontSize:   13,
+    fontWeight: '600',
+  },
+  unfollowBtnDoneText: {
+    color:      C.textMuted,
+    fontSize:   13,
+    fontWeight: '500',
   },
 });
