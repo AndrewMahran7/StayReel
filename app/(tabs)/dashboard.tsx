@@ -1,7 +1,7 @@
 ﻿// app/(tabs)/dashboard.tsx
 // Dashboard: daily snapshot button with countdown, stats, growth chart.
 
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -17,7 +17,7 @@ import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 
 import { useDashboard }                                          from '@/hooks/useDashboard';
-import { useSnapshotCapture, SnapshotLimitError, JobProgress } from '@/hooks/useSnapshotCapture';
+import { useSnapshotCapture, SnapshotLimitError } from '@/hooks/useSnapshotCapture';
 import { DashboardCard }                       from '@/components/DashboardCard';
 import { BannerAdView }                        from '@/components/BannerAdView';
 import { StatsRow }                            from '@/components/StatsRow';
@@ -27,6 +27,7 @@ import { GrowthChart }                         from '@/components/GrowthChart';
 import { useAuthStore }                        from '@/store/authStore';
 import C                                       from '@/lib/colors';
 import type { ListType }                       from '@/hooks/useListData';
+import { TapTheDotGameModal }                  from '@/components/TapTheDotGameModal';
 
 // â”€â”€ Countdown hook â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 function useCountdown(targetIso: string | null): string | null {
@@ -77,6 +78,14 @@ export default function DashboardScreen() {
   const [capturing, setCapturing]              = useState(false);
   const setPendingListType                     = useAuthStore((s) => s.setPendingListType);
 
+  // "Tap the Dot" game modal
+  const [gameOpen,       setGameOpen]       = useState(false);
+  // snapshot completion state for game modal feedback
+  const [snapshotDone,   setSnapshotDone]   = useState(false);
+  const [snapshotErr,    setSnapshotErr]    = useState<string | null>(null);
+  // track previous capturing so we detect the transition
+  const wasCapturingRef = useRef(false);
+
   // next_allowed_at: prefer live API value, updated on rate-limit error
   const [overrideNextAt, setOverrideNextAt]    = useState<string | null>(null);
   const nextAllowedAt  = overrideNextAt ?? data?.next_snapshot_allowed_at ?? null;
@@ -88,11 +97,27 @@ export default function DashboardScreen() {
     if (data?.next_snapshot_allowed_at === null) setOverrideNextAt(null);
   }, [data?.next_snapshot_allowed_at]);
 
+  // Detect snapshot finish → update modal feedback flags
+  useEffect(() => {
+    const isNowCapturing = capturing || capture.isPending;
+    if (wasCapturingRef.current && !isNowCapturing) {
+      // capture just finished
+      if (capture.error) {
+        setSnapshotErr(capture.error.message ?? 'Snapshot failed.');
+      } else {
+        setSnapshotDone(true);
+      }
+    }
+    wasCapturingRef.current = isNowCapturing;
+  }, [capturing, capture.isPending, capture.error]);
+
   const handleRefresh  = useCallback(() => { refetch(); }, [refetch]);
 
   const handleCapture = async () => {
     if (isLimited) return;
     setCapturing(true);
+    setSnapshotDone(false);
+    setSnapshotErr(null);
     try {
       await capture.mutateAsync();
       setOverrideNextAt(null);
@@ -181,28 +206,64 @@ export default function DashboardScreen() {
           One snapshot per day keeps your account safe.
         </Text>
 
-        {/* ── Snapshot progress banner ─────────────────────────────── */}
+        {/* ── Snapshot progress card ────────────────────────────────── */}
         {(capturing || capture.isPending) && (
-          <View style={styles.progressBanner}>
-            <ActivityIndicator size="small" color={C.accent} style={{ marginRight: 8 }} />
-            <View style={{ flex: 1 }}>
-              <Text style={styles.progressTitle}>
-                {capture.progress.phase === 'followers'
-                  ? `Fetching followers — ${capture.progress.followersSeen} so far`
-                  : capture.progress.phase === 'following'
-                  ? `Fetching following — ${capture.progress.followingSeen} so far`
-                  : capture.progress.phase === 'finalize'
-                  ? 'Saving snapshot…'
-                  : 'Starting snapshot…'}
+          <View style={styles.progressCard}>
+            {/* keep-open warning */}
+            <View style={styles.keepOpenRow}>
+              <Ionicons name="information-circle" size={15} color={C.amber} style={{ marginRight: 6 }} />
+              <Text style={styles.keepOpenText}>
+                Keep StayReel open while we refresh — if you leave it will pause.
               </Text>
-              {capture.progress.pagesDone > 0 && (
-                <Text style={styles.progressSub}>
-                  {capture.progress.pagesDone} page{capture.progress.pagesDone !== 1 ? 's' : ''} fetched
-                </Text>
-              )}
             </View>
+
+            {/* live progress line */}
+            <View style={styles.progressBanner}>
+              <ActivityIndicator size="small" color={C.accent} style={{ marginRight: 8 }} />
+              <View style={{ flex: 1 }}>
+                <Text style={styles.progressTitle}>
+                  {capture.progress.phase === 'followers'
+                    ? `Fetching followers — ${capture.progress.followersSeen} so far`
+                    : capture.progress.phase === 'following'
+                    ? `Fetching following — ${capture.progress.followingSeen} so far`
+                    : capture.progress.phase === 'finalize'
+                    ? 'Saving snapshot…'
+                    : 'Starting snapshot…'}
+                </Text>
+                {capture.progress.pagesDone > 0 && (
+                  <Text style={styles.progressSub}>
+                    {capture.progress.pagesDone} page{capture.progress.pagesDone !== 1 ? 's' : ''} fetched
+                  </Text>
+                )}
+              </View>
+            </View>
+
+            {/* play mini-game CTA */}
+            <TouchableOpacity
+              style={styles.playGameBtn}
+              onPress={() => setGameOpen(true)}
+              activeOpacity={0.8}
+            >
+              <View style={styles.playGameBtnInner}>
+                <Ionicons name="game-controller" size={18} color="#fff" style={{ marginRight: 8 }} />
+                <View>
+                  <Text style={styles.playGameTitle}>Play while loading</Text>
+                  <Text style={styles.playGameSub}>Tap the Dot mini-game</Text>
+                </View>
+                <Ionicons name="chevron-forward" size={16} color="rgba(255,255,255,0.6)" style={{ marginLeft: 'auto' }} />
+              </View>
+            </TouchableOpacity>
           </View>
         )}
+
+        {/* ── Game modal ─────────────────────────────────────────────── */}
+        <TapTheDotGameModal
+          visible={gameOpen}
+          onClose={() => setGameOpen(false)}
+          snapshotRunning={capturing || capture.isPending}
+          snapshotDone={snapshotDone}
+          snapshotError={snapshotErr}
+        />
 
         {/* â”€â”€ Error â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
         {error && (
@@ -350,13 +411,33 @@ const styles = StyleSheet.create({
     marginTop:     2,
   },
 
-  progressBanner: {
-    flexDirection:   'row',
-    alignItems:      'center',
+  progressCard: {
     backgroundColor: C.surface,
-    borderRadius:    10,
-    padding:         12,
-    marginBottom:    12,
+    borderRadius:    14,
+    borderWidth:     1,
+    borderColor:     C.border,
+    marginBottom:    14,
+    overflow:        'hidden',
+  },
+  keepOpenRow: {
+    flexDirection:   'row',
+    alignItems:      'flex-start',
+    backgroundColor: C.amberDim,
+    paddingVertical:  8,
+    paddingHorizontal: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: C.border,
+  },
+  keepOpenText: {
+    color:      C.amber,
+    fontSize:   12,
+    flex:       1,
+    lineHeight: 17,
+  },
+  progressBanner: {
+    flexDirection: 'row',
+    alignItems:    'center',
+    padding:       12,
     borderLeftWidth: 3,
     borderLeftColor: C.accent,
   },
@@ -369,6 +450,35 @@ const styles = StyleSheet.create({
     color:      C.textMuted,
     fontSize:   11,
     marginTop:  2,
+  },
+
+  playGameBtn: {
+    backgroundColor: C.accent,
+    margin:          12,
+    marginTop:       8,
+    borderRadius:    12,
+    overflow:        'hidden',
+    shadowColor:     C.accent,
+    shadowOffset:    { width: 0, height: 3 },
+    shadowOpacity:   0.3,
+    shadowRadius:    6,
+    elevation:       4,
+  },
+  playGameBtnInner: {
+    flexDirection:   'row',
+    alignItems:      'center',
+    paddingVertical:  12,
+    paddingHorizontal: 14,
+  },
+  playGameTitle: {
+    color:      '#fff',
+    fontSize:   14,
+    fontWeight: '700',
+  },
+  playGameSub: {
+    color:      'rgba(255,255,255,0.7)',
+    fontSize:   11,
+    marginTop:  1,
   },
 
   errorBox: {
