@@ -2,7 +2,7 @@
   "expo": {
     "name": "StayReel",
     "slug": "stayreel",
-    "version": "1.0.2",
+    "version": "1.1.0",
     "orientation": "portrait",
     "icon": "./assets/icon-dark.png",
     "scheme": "stayreel",

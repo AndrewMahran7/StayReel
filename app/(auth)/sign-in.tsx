@@ -47,6 +47,21 @@ export default function SignInScreen() {
       return;
     }
 
+    // ── App Store review backdoor ──────────────────────────────
+    // If the reviewer enters the designated test email, sign in
+    // with password directly instead of sending a magic link.
+    if (DEV_EMAIL && DEV_PASSWORD && trimmed === DEV_EMAIL.toLowerCase()) {
+      setLoading(true);
+      const { error } = await supabase.auth.signInWithPassword({
+        email:    DEV_EMAIL,
+        password: DEV_PASSWORD,
+      });
+      setLoading(false);
+      if (error) Alert.alert('Sign in failed', error.message);
+      return;
+    }
+    // ──────────────────────────────────────────────────────────
+
     setLoading(true);
     // Linking.createURL returns exp://host/--/auth in Expo Go
     // and stayreel://auth in a native build.
