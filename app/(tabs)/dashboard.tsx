@@ -16,8 +16,8 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 
-import { useDashboard }                        from '@/hooks/useDashboard';
-import { useSnapshotCapture, SnapshotLimitError } from '@/hooks/useSnapshotCapture';
+import { useDashboard }                                          from '@/hooks/useDashboard';
+import { useSnapshotCapture, SnapshotLimitError, JobProgress } from '@/hooks/useSnapshotCapture';
 import { DashboardCard }                       from '@/components/DashboardCard';
 import { BannerAdView }                        from '@/components/BannerAdView';
 import { StatsRow }                            from '@/components/StatsRow';
@@ -160,7 +160,7 @@ export default function DashboardScreen() {
             {capturing || capture.isPending ? (
               <>
                 <ActivityIndicator size="small" color="#fff" />
-                <Text style={styles.captureBtnText}>Fetchingâ€¦</Text>
+                <Text style={styles.captureBtnText}>{progressLabel(capture.progress)}</Text>
               </>
             ) : isLimited ? (
               <>
@@ -180,6 +180,29 @@ export default function DashboardScreen() {
         <Text style={styles.infoText}>
           One snapshot per day keeps your account safe.
         </Text>
+
+        {/* ── Snapshot progress banner ─────────────────────────────── */}
+        {(capturing || capture.isPending) && (
+          <View style={styles.progressBanner}>
+            <ActivityIndicator size="small" color={C.accent} style={{ marginRight: 8 }} />
+            <View style={{ flex: 1 }}>
+              <Text style={styles.progressTitle}>
+                {capture.progress.phase === 'followers'
+                  ? `Fetching followers — ${capture.progress.followersSeen} so far`
+                  : capture.progress.phase === 'following'
+                  ? `Fetching following — ${capture.progress.followingSeen} so far`
+                  : capture.progress.phase === 'finalize'
+                  ? 'Saving snapshot…'
+                  : 'Starting snapshot…'}
+              </Text>
+              {capture.progress.pagesDone > 0 && (
+                <Text style={styles.progressSub}>
+                  {capture.progress.pagesDone} page{capture.progress.pagesDone !== 1 ? 's' : ''} fetched
+                </Text>
+              )}
+            </View>
+          </View>
+        )}
 
         {/* â”€â”€ Error â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
         {error && (
@@ -325,6 +348,27 @@ const styles = StyleSheet.create({
     fontSize:      11,
     marginBottom:  14,
     marginTop:     2,
+  },
+
+  progressBanner: {
+    flexDirection:   'row',
+    alignItems:      'center',
+    backgroundColor: C.surface,
+    borderRadius:    10,
+    padding:         12,
+    marginBottom:    12,
+    borderLeftWidth: 3,
+    borderLeftColor: C.accent,
+  },
+  progressTitle: {
+    color:      C.textPrimary,
+    fontSize:   13,
+    fontWeight: '600',
+  },
+  progressSub: {
+    color:      C.textMuted,
+    fontSize:   11,
+    marginTop:  2,
   },
 
   errorBox: {

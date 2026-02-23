@@ -490,6 +490,131 @@ async function fetchEdgeList(
 }
 
 // ─────────────────────────────────────────────────────────────
+// Public: chunked edge fetcher (for resumable snapshot jobs)
+// ─────────────────────────────────────────────────────────────
+
+export interface ChunkedFetchOptions {
+  /** Resume from this cursor (next_max_id from a previous invocation). */
+  startCursor?: string | null;
+  /** Stop after this many ms (wall-clock, measured from call time). */
+  timeBudgetMs?: number;
+  /** Safety cap: stop after this many pages regardless of time. */
+  maxPages?: number;
+}
+
+export interface ChunkedFetchResult {
+  edges: IgEdge[];
+  /** Non-null means more pages exist — pass back as startCursor next time. */
+  nextCursor: string | null;
+  isComplete: boolean;
+  pagesFetched: number;
+  stopReason: FailureCode | null;
+}
+
+/**
+ * Fetches one chunk of the followers or following list.
+ *
+ * Unlike `fetchEdgeList` (which runs until completion), this function
+ * respects `timeBudgetMs` and `maxPages` so it can be called repeatedly
+ * across multiple Edge Function invocations.
+ *
+ * Pass the returned `nextCursor` back as `startCursor` on the next call
+ * to resume exactly where this one ended.
+ */
+export async function fetchEdgeListChunked(
+  igUserId: string,
+  direction: "followers" | "following",
+  cookie: string,
+  options: ChunkedFetchOptions = {},
+): Promise<ChunkedFetchResult> {
+  const {
+    startCursor = null,
+    timeBudgetMs = 70_000,
+    maxPages = 50,
+  } = options;
+
+  const deadline   = Date.now() + timeBudgetMs;
+  const rankToken  = newRankToken(igUserId);
+  const edges: IgEdge[] = [];
+  let nextMaxId    = startCursor;
+  let page         = 0;
+
+  while (page < maxPages) {
+    // Time-budget check before each page fetch
+    if (Date.now() >= deadline) {
+      console.log(`[ig-chunked] ${direction}: time budget hit at page ${page} (${edges.length} edges)`);
+      return { edges, nextCursor: nextMaxId, isComplete: false, pagesFetched: page, stopReason: null };
+    }
+
+    const qs = new URLSearchParams({ count: String(PAGE_SIZE) });
+    qs.set("rank_token", rankToken);
+    if (nextMaxId) qs.set("max_id", nextMaxId);
+
+    const url = `${IG_API}/friendships/${igUserId}/${direction}/?${qs.toString()}`;
+    const result = await igGetWithRetry(url, cookie);
+
+    if (!result.ok) {
+      console.warn(`[ig-chunked] ${direction} page ${page + 1} failed: ${result.failureCode}`);
+      return { edges, nextCursor: nextMaxId, isComplete: false, pagesFetched: page, stopReason: result.failureCode };
+    }
+
+    const users = (result.body.users ?? result.body.items ?? []) as Array<Record<string, unknown>>;
+    if (!Array.isArray(users)) {
+      return { edges, nextCursor: nextMaxId, isComplete: false, pagesFetched: page, stopReason: "SUSPICIOUS_RESPONSE" };
+    }
+
+    for (const u of users) {
+      edges.push({ ig_id: String(u.pk ?? u.id ?? ""), username: String(u.username ?? "") });
+    }
+    page++;
+
+    console.log(`[ig-chunked] ${direction} page ${page}: got ${users.length} (total ${edges.length}), big_list=${result.body.big_list ?? false}`);
+
+    // Resolve next cursor — check next_max_id then page_info.end_cursor
+    const rawCursor = result.body.next_max_id
+      ?? (result.body.page_info as Record<string, unknown> | undefined)?.end_cursor
+      ?? null;
+
+    if (rawCursor !== null && rawCursor !== undefined && String(rawCursor).length > 0 && rawCursor !== "0" && rawCursor !== 0) {
+      nextMaxId = String(rawCursor);
+    } else {
+      nextMaxId = null;
+    }
+
+    if (!nextMaxId) {
+      const bigList = Boolean(result.body.big_list);
+      if (bigList) {
+        // big_list retry: wait and re-request with a fresh token
+        const freshToken = newRankToken(igUserId);
+        await sleep(randomBetween(8_000, 12_000));
+        const retryQs = new URLSearchParams({ count: String(PAGE_SIZE) });
+        retryQs.set("rank_token", freshToken);
+        const retryResult = await igGetWithRetry(
+          `${IG_API}/friendships/${igUserId}/${direction}/?${retryQs.toString()}`, cookie
+        );
+        if (retryResult.ok) {
+          const rc = retryResult.body.next_max_id
+            ?? (retryResult.body.page_info as Record<string, unknown> | undefined)?.end_cursor
+            ?? null;
+          if (rc && String(rc).length > 0 && rc !== "0" && rc !== 0) {
+            nextMaxId = String(rc);
+            await sleep(randomBetween(PAGE_DELAY_MIN, PAGE_DELAY_MAX));
+            continue;
+          }
+        }
+        console.warn(`[ig-chunked] ${direction} page ${page}: big_list, no cursor after retry — stopping at ${edges.length}`);
+      }
+      return { edges, nextCursor: null, isComplete: !bigList, pagesFetched: page, stopReason: bigList ? "PAGE_LIMIT_REACHED" : null };
+    }
+
+    await sleep(randomBetween(PAGE_DELAY_MIN, PAGE_DELAY_MAX));
+  }
+
+  console.warn(`[ig-chunked] ${direction}: maxPages (${maxPages}) hit, stopped at ${edges.length}`);
+  return { edges, nextCursor: nextMaxId, isComplete: false, pagesFetched: page, stopReason: "PAGE_LIMIT_REACHED" };
+}
+
+// ─────────────────────────────────────────────────────────────
 // Public entry point
 // ─────────────────────────────────────────────────────────────
 

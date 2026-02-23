@@ -2,9 +2,9 @@
   "expo": {
     "name": "StayReel",
     "slug": "stayreel",
-    "version": "1.0.1",
+    "version": "1.0.2",
     "orientation": "portrait",
-    "icon": "./assets/icon.png",
+    "icon": "./assets/icon-dark.png",
     "scheme": "stayreel",
     "userInterfaceStyle": "dark",
     "splash": {
