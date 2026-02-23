@@ -74,7 +74,7 @@ async function startJob(igAccountId: string): Promise<ChunkResponse> {
   const body = await res.json().catch(() => ({}));
   if (!res.ok) {
     if (body?.error === 'SNAPSHOT_LIMIT' && body?.detail?.next_allowed_at) {
-      throw new SnapshotLimitError(body.detail.next_allowed_at, body.message ?? 'Daily limit reached.');
+      throw new SnapshotLimitError(body.detail.next_allowed_at, body.message ?? 'You can take one snapshot per hour.');
     }
     throw new Error(body?.message ?? `HTTP ${res.status}`);
   }

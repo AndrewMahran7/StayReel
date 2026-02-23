@@ -16,7 +16,7 @@ import { errorResponse, Errors } from "../_shared/errors.ts";
 import { requireAuth, requireOwnsAccount } from "../_shared/auth.ts";
 import { adminClient } from "../_shared/supabase_client.ts";
 
-const DAILY_LIMIT_MS = 24 * 60 * 60 * 1_000;
+const SNAPSHOT_COOLDOWN_MS = 1 * 60 * 60 * 1_000;
 
 interface IgEdge { ig_id: string; username: string; }
 
@@ -80,7 +80,7 @@ Deno.serve(async (req: Request) => {
     let next_snapshot_allowed_at: string | null = null;
     if (acct?.last_snapshot_at) {
       const lastMs = new Date(acct.last_snapshot_at).getTime();
-      const nextMs = lastMs + DAILY_LIMIT_MS;
+      const nextMs = lastMs + SNAPSHOT_COOLDOWN_MS;
       if (nextMs > Date.now()) {
         next_snapshot_allowed_at = new Date(nextMs).toISOString();
       }

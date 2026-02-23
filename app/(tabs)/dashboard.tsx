@@ -211,7 +211,7 @@ export default function DashboardScreen() {
 
         {/* Safety info text */}
         <Text style={styles.infoText}>
-          One snapshot per day keeps your account safe.
+          One snapshot per hour keeps your account safe.
         </Text>
 
         {/* ── Snapshot progress card ────────────────────────────────── */}

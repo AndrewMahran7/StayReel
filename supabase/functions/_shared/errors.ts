@@ -61,7 +61,7 @@ export const Errors = {
   snapshotLimit: (nextAllowedAt: string) =>
     new AppError(
       "SNAPSHOT_LIMIT",
-      "Daily snapshot already taken. Your account gets one snapshot per day.",
+      "Snapshot already taken recently. You can take one snapshot per hour.",
       429,
       { next_allowed_at: nextAllowedAt },
     ),

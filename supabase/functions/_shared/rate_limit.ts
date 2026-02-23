@@ -1,5 +1,5 @@
 // _shared/rate_limit.ts
-// Snapshot rate limiting: one snapshot per 24 hours per IG account.
+// Snapshot rate limiting: one snapshot per hour per IG account.
 // Enforced via ig_accounts.last_snapshot_at on the backend.
 
 import { adminClient } from "./supabase_client.ts";
@@ -8,8 +8,8 @@ import { writeAuditEvent } from "./audit.ts";
 
 export type QuotaType = "manual" | "cron";
 
-/** 24-hour gap between manual snapshots (ms). */
-const DAILY_LIMIT_MS = 24 * 60 * 60 * 1_000;
+/** Minimum gap between manual snapshots (ms) — 1 hour. */
+const SNAPSHOT_COOLDOWN_MS = 1 * 60 * 60 * 1_000;
 
 /**
  * Enforces one snapshot per 24 hours per IG account.
@@ -32,8 +32,8 @@ export async function checkAndEnforce24hLimit(
   const nowMs     = Date.now();
   const elapsedMs = nowMs - lastMs;
 
-  if (elapsedMs < DAILY_LIMIT_MS) {
-    const nextAllowedAt = new Date(lastMs + DAILY_LIMIT_MS).toISOString();
+  if (elapsedMs < SNAPSHOT_COOLDOWN_MS) {
+    const nextAllowedAt = new Date(lastMs + SNAPSHOT_COOLDOWN_MS).toISOString();
 
     await writeAuditEvent({
       userId,
