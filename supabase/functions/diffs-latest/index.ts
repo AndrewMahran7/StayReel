@@ -17,6 +17,7 @@ import { requireAuth, requireOwnsAccount } from "../_shared/auth.ts";
 import { adminClient } from "../_shared/supabase_client.ts";
 
 const SNAPSHOT_COOLDOWN_MS = 1 * 60 * 60 * 1_000;
+const DAILY_SNAPSHOT_CAP   = 3;
 
 interface IgEdge { ig_id: string; username: string; }
 
@@ -76,8 +77,10 @@ Deno.serve(async (req: Request) => {
       ? snap.mutual_count
       : following.filter(e => followersMap.has(edgeKey(e))).length;
 
-    // â”€â”€ next_snapshot_allowed_at â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── next_snapshot_allowed_at ──────────────────────────────────────────
     let next_snapshot_allowed_at: string | null = null;
+
+    // 1. Hourly cooldown
     if (acct?.last_snapshot_at) {
       const lastMs = new Date(acct.last_snapshot_at).getTime();
       const nextMs = lastMs + SNAPSHOT_COOLDOWN_MS;
@@ -86,7 +89,28 @@ Deno.serve(async (req: Request) => {
       }
     }
 
-    // â”€â”€ Latest complete diff for change metrics â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // 2. Daily cap (rolling 24-hour window) — may push next_allowed_at later
+    const windowStart = new Date(Date.now() - 24 * 60 * 60 * 1_000).toISOString();
+    const { data: recentJobs } = await adminClient()
+      .from("snapshot_jobs")
+      .select("updated_at")
+      .eq("ig_account_id", igAccountId)
+      .eq("status", "complete")
+      .gte("updated_at", windowStart)
+      .order("updated_at", { ascending: true });
+
+    if (recentJobs && recentJobs.length >= DAILY_SNAPSHOT_CAP) {
+      const oldestAt      = (recentJobs[0] as { updated_at: string }).updated_at;
+      const dailyUnlockMs = new Date(oldestAt).getTime() + 24 * 60 * 60 * 1_000;
+      if (
+        !next_snapshot_allowed_at ||
+        dailyUnlockMs > new Date(next_snapshot_allowed_at).getTime()
+      ) {
+        next_snapshot_allowed_at = new Date(dailyUnlockMs).toISOString();
+      }
+    }
+
+    // ── Latest complete diff for change metrics ──────────────────────────
     const { data: diffs } = await adminClient()
       .from("diffs")
       .select(

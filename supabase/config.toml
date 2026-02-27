@@ -38,6 +38,14 @@ enable_signup = true
 double_confirm_changes = true
 enable_confirmations = true
 
+[auth.email.template.confirmation]
+subject = "Confirm your StayReel account"
+content_path = "./supabase/templates/confirmation.html"
+
+[auth.email.template.magic_link]
+subject = "Your StayReel sign-in link"
+content_path = "./supabase/templates/magic-link.html"
+
 [auth.external.google]
 enabled = false
 client_id = "env(GOOGLE_CLIENT_ID)"

@@ -26,6 +26,7 @@ function AuthGuard() {
 
     const inAuth  = segments[0] === '(auth)';
     const inTabs  = segments[0] === '(tabs)';
+    const inModal = segments[0] === 'our-promise' || segments[0] === 'troubleshooting';
 
     if (!session) {
       if (!inAuth) router.replace('/(auth)/sign-in');
@@ -34,7 +35,7 @@ function AuthGuard() {
         router.replace('/(auth)/connect-instagram');
       }
     } else {
-      if (!inTabs) router.replace('/(tabs)/dashboard');
+      if (!inTabs && !inModal) router.replace('/(tabs)/dashboard');
     }
   }, [session, initialised, igAccountId, segments]);
 
@@ -103,6 +104,8 @@ export default function RootLayout() {
           <Stack.Screen name="auth" />
           <Stack.Screen name="(auth)" />
           <Stack.Screen name="(tabs)" />
+          <Stack.Screen name="our-promise" />
+          <Stack.Screen name="troubleshooting" />
         </Stack>
       </SafeAreaProvider>
     </QueryClientProvider>

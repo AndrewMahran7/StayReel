@@ -58,10 +58,10 @@ export const Errors = {
   badRequest: (msg: string, detail?: unknown) =>
     new AppError("BAD_REQUEST", msg, 400, detail),
 
-  snapshotLimit: (nextAllowedAt: string) =>
+  snapshotLimit: (nextAllowedAt: string, message?: string) =>
     new AppError(
       "SNAPSHOT_LIMIT",
-      "Snapshot already taken recently. You can take one snapshot per hour.",
+      message ?? "Snapshot already taken recently. You can take one snapshot per hour.",
       429,
       { next_allowed_at: nextAllowedAt },
     ),

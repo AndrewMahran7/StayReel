@@ -24,6 +24,7 @@ import { StatsRow }                            from '@/components/StatsRow';
 import { WeeklySummaryCard }                   from '@/components/WeeklySummaryCard';
 import { StreakBadge }                         from '@/components/StreakBadge';
 import { GrowthChart }                         from '@/components/GrowthChart';
+import { SnapshotErrorCard }                   from '@/components/SnapshotErrorCard';
 import { useAuthStore }                        from '@/store/authStore';
 import C                                       from '@/lib/colors';
 import type { ListType }                       from '@/hooks/useListData';
@@ -115,6 +116,16 @@ export default function DashboardScreen() {
 
   const handleCapture = async () => {
     if (isLimited) return;
+
+    await new Promise<void>((resolve) =>
+      Alert.alert(
+        'This takes a few minutes ⏳',
+        "We fetch your followers slowly on purpose — it keeps your Instagram account safe.\n\nWhile you wait, play Tap the Dot! We genuinely appreciate your patience. 🙏",
+        [{ text: 'Got it, let\'s go!', onPress: () => resolve() }],
+        { cancelable: false },
+      )
+    );
+
     setCapturing(true);
     setSnapshotDone(false);
     setSnapshotErr(null);
@@ -124,9 +135,9 @@ export default function DashboardScreen() {
     } catch (err: any) {
       if (err instanceof SnapshotLimitError) {
         setOverrideNextAt(err.nextAllowedAt);
-      } else {
-        Alert.alert('Snapshot failed', err.message ?? 'Try again later.');
       }
+      // All other errors: capture.error is already set by the hook and
+      // shown inline via SnapshotErrorCard — no Alert needed.
     } finally {
       setCapturing(false);
     }
@@ -211,7 +222,7 @@ export default function DashboardScreen() {
 
         {/* Safety info text */}
         <Text style={styles.infoText}>
-          One snapshot per hour keeps your account safe.
+          Up to 3 snapshots per day, 1 per hour — keeps your account safe.
         </Text>
 
         {/* ── Snapshot progress card ────────────────────────────────── */}
@@ -246,6 +257,16 @@ export default function DashboardScreen() {
               </View>
             </View>
 
+            {/* cached following note */}
+            {capture.progress.followingCached && (
+              <View style={styles.cachedFollowingRow}>
+                <Ionicons name="shield-checkmark-outline" size={14} color={C.teal} style={{ marginRight: 6 }} />
+                <Text style={styles.cachedFollowingText}>
+                  Using your following list from earlier today — refreshed once daily to keep your account safe.
+                </Text>
+              </View>
+            )}
+
             {/* play mini-game CTA */}
             <TouchableOpacity
               style={styles.playGameBtn}
@@ -273,7 +294,15 @@ export default function DashboardScreen() {
           snapshotError={snapshotErr}
         />
 
-        {/* â”€â”€ Error â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
+        {/* Snapshot capture error */}
+        {capture.error && (
+          <SnapshotErrorCard
+            error={capture.error}
+            onDismiss={capture.clearError}
+          />
+        )}
+
+        {/* Dashboard load error */}
         {error && (
           <View style={styles.errorBox}>
             <Ionicons name="alert-circle" size={18} color={C.red} />
@@ -458,6 +487,22 @@ const styles = StyleSheet.create({
     color:      C.textMuted,
     fontSize:   11,
     marginTop:  2,
+  },
+
+  cachedFollowingRow: {
+    flexDirection:     'row',
+    alignItems:        'flex-start',
+    backgroundColor:   C.tealDim,
+    paddingVertical:   8,
+    paddingHorizontal: 12,
+    borderTopWidth:    1,
+    borderTopColor:    C.border,
+  },
+  cachedFollowingText: {
+    color:      C.teal,
+    fontSize:   12,
+    flex:       1,
+    lineHeight: 17,
   },
 
   playGameBtn: {

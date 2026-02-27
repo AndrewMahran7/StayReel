@@ -58,6 +58,7 @@ export interface ChunkResult {
   followingSeen: number;
   done: boolean;
   message: string;
+  followingCached: boolean;
 }
 
 // ── Main worker ────────────────────────────────────────────────────────────
@@ -86,6 +87,7 @@ export async function runSnapshotChunk(
   let pagesDone  = job.pages_done;
   let followersCursor = job.followers_cursor;
   let followingCursor = job.following_cursor;
+  let followingFromCache = false;
 
   // ── Phase: followers ─────────────────────────────────────────────────────
   if (phase === "followers") {
@@ -128,45 +130,57 @@ export async function runSnapshotChunk(
 
   // ── Phase: following ─────────────────────────────────────────────────────
   if (phase === "following") {
-    const rem = remaining();
-    if (rem < ADVANCE_THRESHOLD_MS) {
-      // Not enough time — defer to next invocation
-      console.log(`[job ${job.id}] following deferred (${rem}ms remaining)`);
-      return makeResult(job.id, "running", "following", pagesDone, followers.length, following.length, false, "Fetching following list…");
-    }
-
-    const result = await fetchEdgeListChunked(igUserId, "following", cookie, {
-      startCursor:  followingCursor,
-      timeBudgetMs: remaining() - 5_000,
-      maxPages:     MAX_PAGES_PER_INVOCATION,
-    });
-
-    following    = [...following, ...result.edges];
-    pagesDone   += result.pagesFetched;
-    followingCursor = result.nextCursor;
-
-    if (result.stopReason && result.stopReason !== "PAGE_LIMIT_REACHED") {
-      const mode = FAILURE_MODES[result.stopReason];
-      await failJob(db, job.id, mode?.uiMessage ?? result.stopReason);
-      return makeResult(job.id, "failed", phase, pagesDone, followers.length, following.length, true, mode?.uiMessage ?? result.stopReason);
-    }
-
-    const followingPhaseDone = result.isComplete || result.nextCursor === null;
-
-    await db.from("snapshot_jobs").update({
-      following_json:   following,
-      following_cursor: followingPhaseDone ? null : followingCursor,
-      phase:            followingPhaseDone ? "finalize" : "following",
-      pages_done:       pagesDone,
-      updated_at:       new Date().toISOString(),
-    }).eq("id", job.id);
-
-    if (followingPhaseDone) {
+    // Cache hit: following was pre-populated from a snapshot taken earlier today.
+    // Only refresh the following list once per 24 h to protect the account.
+    if (following.length > 0 && followingCursor === null) {
+      console.log(`[job ${job.id}] following served from cache (${following.length} edges). Skipping API fetch.`);
+      followingFromCache = true;
+      await db.from("snapshot_jobs").update({
+        phase:      "finalize",
+        updated_at: new Date().toISOString(),
+      }).eq("id", job.id);
       phase = "finalize";
-      console.log(`[job ${job.id}] following complete (${following.length} edges). Advancing to finalize.`);
     } else {
-      console.log(`[job ${job.id}] following chunk done: ${following.length} so far.`);
-      return makeResult(job.id, "running", "following", pagesDone, followers.length, following.length, false, "Fetching following list…");
+      const rem = remaining();
+      if (rem < ADVANCE_THRESHOLD_MS) {
+        // Not enough time — defer to next invocation
+        console.log(`[job ${job.id}] following deferred (${rem}ms remaining)`);
+        return makeResult(job.id, "running", "following", pagesDone, followers.length, following.length, false, "Fetching following list…");
+      }
+
+      const result = await fetchEdgeListChunked(igUserId, "following", cookie, {
+        startCursor:  followingCursor,
+        timeBudgetMs: remaining() - 5_000,
+        maxPages:     MAX_PAGES_PER_INVOCATION,
+      });
+
+      following    = [...following, ...result.edges];
+      pagesDone   += result.pagesFetched;
+      followingCursor = result.nextCursor;
+
+      if (result.stopReason && result.stopReason !== "PAGE_LIMIT_REACHED") {
+        const mode = FAILURE_MODES[result.stopReason];
+        await failJob(db, job.id, mode?.uiMessage ?? result.stopReason);
+        return makeResult(job.id, "failed", phase, pagesDone, followers.length, following.length, true, mode?.uiMessage ?? result.stopReason);
+      }
+
+      const followingPhaseDone = result.isComplete || result.nextCursor === null;
+
+      await db.from("snapshot_jobs").update({
+        following_json:   following,
+        following_cursor: followingPhaseDone ? null : followingCursor,
+        phase:            followingPhaseDone ? "finalize" : "following",
+        pages_done:       pagesDone,
+        updated_at:       new Date().toISOString(),
+      }).eq("id", job.id);
+
+      if (followingPhaseDone) {
+        phase = "finalize";
+        console.log(`[job ${job.id}] following complete (${following.length} edges). Advancing to finalize.`);
+      } else {
+        console.log(`[job ${job.id}] following chunk done: ${following.length} so far.`);
+        return makeResult(job.id, "running", "following", pagesDone, followers.length, following.length, false, "Fetching following list…");
+      }
     }
   }
 
@@ -291,7 +305,7 @@ export async function runSnapshotChunk(
       }).eq("id", job.id);
 
       console.log(`[job ${job.id}] finalized: snapshot ${snapshot.id}, ${followerCount} followers, ${followingCount} following`);
-      return makeResult(job.id, "complete", "finalize", pagesDone, followers.length, following.length, true, "Snapshot complete.");
+      return makeResult(job.id, "complete", "finalize", pagesDone, followers.length, following.length, true, "Snapshot complete.", followingFromCache);
 
     } catch (err) {
       const msg = (err as Error).message ?? "Finalization error";
@@ -324,6 +338,7 @@ function makeResult(
   followingSeen: number,
   done: boolean,
   message: string,
+  followingCached = false,
 ): ChunkResult {
-  return { jobId, status, phase, pagesDone, followersSeen, followingSeen, done, message };
+  return { jobId, status, phase, pagesDone, followersSeen, followingSeen, done, message, followingCached };
 }

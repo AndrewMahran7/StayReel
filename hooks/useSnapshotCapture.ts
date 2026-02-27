@@ -27,6 +27,7 @@ export interface JobProgress {
   pagesDone:      number;
   followersSeen:  number;
   followingSeen:  number;
+  followingCached: boolean;
 }
 
 export class SnapshotLimitError extends Error {
@@ -36,6 +37,17 @@ export class SnapshotLimitError extends Error {
   ) {
     super(message);
     this.name = 'SnapshotLimitError';
+  }
+}
+
+/** Thrown when the server returns a typed error code during a snapshot job. */
+export class SnapshotError extends Error {
+  constructor(
+    public readonly code: string,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'SnapshotError';
   }
 }
 
@@ -61,6 +73,7 @@ interface ChunkResponse {
   followersSeen: number;
   followingSeen: number;
   done:          boolean;
+  followingCached?: boolean;
   error?:        string;
   message?:      string;
 }
@@ -76,7 +89,11 @@ async function startJob(igAccountId: string): Promise<ChunkResponse> {
     if (body?.error === 'SNAPSHOT_LIMIT' && body?.detail?.next_allowed_at) {
       throw new SnapshotLimitError(body.detail.next_allowed_at, body.message ?? 'You can take one snapshot per hour.');
     }
-    throw new Error(body?.message ?? `HTTP ${res.status}`);
+    // 401 can come from Supabase gateway ({"msg":"Invalid JWT"}) or our own requireAuth
+    if (res.status === 401 || body?.error === 'UNAUTHORIZED') {
+      throw new SnapshotError('UNAUTHORIZED', 'Session expired. Please sign out and sign back in.');
+    }
+    throw new SnapshotError(body?.error ?? 'UNKNOWN', body?.message ?? `HTTP ${res.status}`);
   }
   return body as ChunkResponse;
 }
@@ -88,7 +105,12 @@ async function continueJob(jobId: string): Promise<ChunkResponse> {
     body:    JSON.stringify({ job_id: jobId }),
   });
   const body = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(body?.message ?? `HTTP ${res.status}`);
+  if (!res.ok) {
+    if (res.status === 401 || body?.error === 'UNAUTHORIZED') {
+      throw new SnapshotError('UNAUTHORIZED', 'Session expired. Please sign out and sign back in.');
+    }
+    throw new SnapshotError(body?.error ?? 'UNKNOWN', body?.message ?? `HTTP ${res.status}`);
+  }
   return body as ChunkResponse;
 }
 
@@ -104,7 +126,7 @@ export function useSnapshotCapture() {
   const [isPending,   setIsPending]   = useState(false);
   const [error,       setError]       = useState<Error | null>(null);
   const [progress,    setProgress]    = useState<JobProgress>({
-    phase: null, pagesDone: 0, followersSeen: 0, followingSeen: 0,
+    phase: null, pagesDone: 0, followersSeen: 0, followingSeen: 0, followingCached: false,
   });
 
   // Allow callers to cancel mid-flight
@@ -116,16 +138,20 @@ export function useSnapshotCapture() {
     cancelled.current = false;
     setIsPending(true);
     setError(null);
-    setProgress({ phase: null, pagesDone: 0, followersSeen: 0, followingSeen: 0 });
+    setProgress({ phase: null, pagesDone: 0, followersSeen: 0, followingSeen: 0, followingCached: false });
 
     try {
       // ── Start ──
+      let runFollowingCached = false;   // latched true once any response confirms cache
+
       const first = await startJob(igAccountId);
+      if (first.followingCached) runFollowingCached = true;
       setProgress({
-        phase:         first.phase,
-        pagesDone:     first.pagesDone,
-        followersSeen: first.followersSeen,
-        followingSeen: first.followingSeen,
+        phase:           first.phase,
+        pagesDone:       first.pagesDone,
+        followersSeen:   first.followersSeen,
+        followingSeen:   first.followingSeen,
+        followingCached: runFollowingCached,
       });
 
       if (first.done) {
@@ -143,12 +169,14 @@ export function useSnapshotCapture() {
 
         try {
           current = await continueJob(jobId);
+          if (current.followingCached) runFollowingCached = true;
           retries = 0;
           setProgress({
-            phase:         current.phase,
-            pagesDone:     current.pagesDone,
-            followersSeen: current.followersSeen,
-            followingSeen: current.followingSeen,
+            phase:           current.phase,
+            pagesDone:       current.pagesDone,
+            followersSeen:   current.followersSeen,
+            followingSeen:   current.followingSeen,
+            followingCached: runFollowingCached,
           });
         } catch (pollErr) {
           retries++;
@@ -159,7 +187,13 @@ export function useSnapshotCapture() {
       }
 
       if (cancelled.current) throw new Error('Snapshot cancelled.');
-      if (current.status === 'failed') throw new Error(current.error ?? 'Snapshot job failed.');
+      if (current.status === 'failed') {
+        // Map job-level failure message to a SnapshotError with a code so the
+        // UI can show appropriate guidance. The message often contains the code.
+        const raw = current.error ?? current.message ?? 'Snapshot job failed.';
+        const code = inferCodeFromMessage(raw);
+        throw new SnapshotError(code, raw);
+      }
 
       return finalise(current);
 
@@ -177,6 +211,7 @@ export function useSnapshotCapture() {
   }, [igAccountId, qc]);
 
   const cancel = useCallback(() => { cancelled.current = true; }, []);
+  const clearError = useCallback(() => setError(null), []);
 
   return {
     isPending,
@@ -189,6 +224,7 @@ export function useSnapshotCapture() {
         .catch(opts?.onError);
     },
     cancel,
+    clearError,
   };
 }
 
@@ -201,5 +237,15 @@ function finalise(chunk: ChunkResponse): CaptureResult {
     jobId:   chunk.jobId,
     status:  chunk.status,
   };
+}
+
+/** Best-effort mapping from a raw job failure message to a typed code. */
+function inferCodeFromMessage(msg: string): string {
+  const m = msg.toUpperCase();
+  if (m.includes('SESSION_EXPIRED') || m.includes('SESSION EXPIRED') || m.includes('IG_SESSION_INVALID')) return 'SESSION_EXPIRED';
+  if (m.includes('CHALLENGE_REQUIRED') || m.includes('CHECKPOINT_REQUIRED')) return 'CHALLENGE_REQUIRED';
+  if (m.includes('IG_RATE_LIMITED') || m.includes('RATE') || m.includes('THROTTL')) return 'IG_RATE_LIMITED';
+  if (m.includes('SUSPICIOUS')) return 'SUSPICIOUS_RESPONSE';
+  return 'INTERNAL_ERROR';
 }
 

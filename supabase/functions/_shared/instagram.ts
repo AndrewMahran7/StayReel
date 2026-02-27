@@ -20,6 +20,7 @@
 // • Partial results returned when stopped early — never an exception
 
 // (No AppError/Errors imports needed — this module uses its own result types)
+import { AppError, Errors } from "./errors.ts";
 
 // ─────────────────────────────────────────────────────────────
 // Failure mode catalogue
@@ -186,9 +187,18 @@ export interface FetchResult {
 
 const IG_API = "https://i.instagram.com/api/v1";
 const IG_APP_ID = "936619743392459";
-const USER_AGENT =
-  "Instagram 314.0.0.35.109 Android (26/8.0.0; 480dpi; 1080x1920; " +
-  "OnePlus; ONEPLUS A5000; OnePlus5; qcom; en_US; 556543836)";
+
+/**
+ * Rotate through realistic Instagram Android app versions + devices.
+ * A fixed User-Agent across all users is a fingerprint — vary it per request.
+ */
+const USER_AGENTS = [
+  "Instagram 314.0.0.35.109 Android (26/8.0.0; 480dpi; 1080x1920; OnePlus; ONEPLUS A5000; OnePlus5; qcom; en_US; 556543836)",
+  "Instagram 310.0.0.40.119 Android (28/9.0; 420dpi; 1080x2220; samsung; SM-G965F; star2lte; samsungexynos9810; en_US; 549571859)",
+  "Instagram 312.0.0.34.111 Android (29/10.0; 560dpi; 1440x3040; samsung; SM-G975U; beyond2q; qcom; en_US; 551874836)",
+  "Instagram 308.0.0.41.122 Android (31/12; 440dpi; 1080x2400; Google; Pixel 5; redfin; redfin; en_US; 547489008)",
+  "Instagram 315.0.0.30.109 Android (33/13.0; 400dpi; 1080x2400; Google; Pixel 7; panther; panther; en_US; 558471039)",
+];
 
 /** Hard page cap per direction per run.
  *  big_list accounts return ~20 users/page on the followers endpoint,
@@ -201,9 +211,9 @@ const BACKOFF_MAX_MS  = 32_000;
 const BACKOFF_JITTER  = 1_000;
 const MAX_RETRIES     = 4;
 
-/** Polite inter-page pause: 1 000–2 000 ms randomised. */
-const PAGE_DELAY_MIN  = 1_000;
-const PAGE_DELAY_MAX  = 2_000;
+/** Polite inter-page pause: 10 000–15 000 ms randomised. */
+const PAGE_DELAY_MIN  = 10_000;
+const PAGE_DELAY_MAX  = 15_000;
 
 /** Start-delay for the second parallel direction. Separates the first page
  *  requests so Instagram doesn't see a simultaneous burst from the same session.
@@ -220,8 +230,9 @@ function extractCsrf(cookie: string): string {
 }
 
 function buildHeaders(cookie: string): HeadersInit {
+  const ua = USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
   return {
-    "User-Agent":           USER_AGENT,
+    "User-Agent":           ua,
     "Cookie":               cookie,
     "X-CSRFToken":          extractCsrf(cookie),
     "X-IG-App-ID":          IG_APP_ID,
@@ -242,6 +253,14 @@ function jitter(baseMs: number): number {
 
 function randomBetween(min: number, max: number): number {
   return min + Math.floor(Math.random() * (max - min));
+}
+
+/**
+ * Returns a random page size between 100–200 per request.
+ * Real Instagram app varies this naturally — always requesting 200 is a bot signal.
+ */
+function randomPageSize(): number {
+  return randomBetween(100, 200);
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -404,7 +423,7 @@ async function fetchEdgeList(
   const rankToken = newRankToken(igUserId);
 
   while (page < MAX_PAGES) {
-    const qs = new URLSearchParams({ count: String(PAGE_SIZE) });
+    const qs = new URLSearchParams({ count: String(randomPageSize()) });
     qs.set("rank_token", rankToken);
     if (nextMaxId) qs.set("max_id", nextMaxId);
 
@@ -454,7 +473,7 @@ async function fetchEdgeList(
           const freshToken = newRankToken(igUserId);
           await sleep(randomBetween(10_000, 15_000));
 
-          const retryQs = new URLSearchParams({ count: String(PAGE_SIZE) });
+          const retryQs = new URLSearchParams({ count: String(randomPageSize()) });
           retryQs.set("rank_token", freshToken);
           // Use the last cursor we had (nextMaxId is null here, so omit max_id —
           // this re-fetches relative to the last known offset via rank_token).
@@ -539,6 +558,15 @@ export async function fetchEdgeListChunked(
   let nextMaxId    = startCursor;
   let page         = 0;
 
+  // Warmup: on fresh start (not resuming from a cursor), make a cheap profile
+  // request before hitting the friends list endpoint. Real Instagram app always
+  // fetches the current user profile before paginating friendships — skipping
+  // this cold jump onto the friendships API looks robotic.
+  if (!startCursor) {
+    await igGet(`${IG_API}/accounts/current_user/?edit=true`, cookie);
+    await sleep(randomBetween(1_500, 3_000)); // natural navigation delay
+  }
+
   while (page < maxPages) {
     // Time-budget check before each page fetch
     if (Date.now() >= deadline) {
@@ -587,7 +615,7 @@ export async function fetchEdgeListChunked(
         // big_list retry: wait and re-request with a fresh token
         const freshToken = newRankToken(igUserId);
         await sleep(randomBetween(8_000, 12_000));
-        const retryQs = new URLSearchParams({ count: String(PAGE_SIZE) });
+        const retryQs = new URLSearchParams({ count: String(randomPageSize()) });
         retryQs.set("rank_token", freshToken);
         const retryResult = await igGetWithRetry(
           `${IG_API}/friendships/${igUserId}/${direction}/?${retryQs.toString()}`, cookie
@@ -712,15 +740,29 @@ function emptyResult(fetchedAt: string, stopReason: FailureCode): FetchResult {
  * Validates the session cookie and returns the current user's
  * ig_id (numeric string) and username.
  *
- * Throws a plain Error if the session is invalid or Instagram
- * requires a challenge, so callers can return a 401/403 response.
+ * Throws an AppError with the appropriate code so callers can
+ * return a properly typed error response (not a generic 500).
  */
 export async function getIgCurrentUser(
   cookie: string,
 ): Promise<ProfileInfo> {
   const result = await getCurrentUserProfile(cookie);
   if (!result.ok) {
-    throw new Error(`instagram:${result.failureCode}`);
+    switch (result.failureCode) {
+      case "SESSION_EXPIRED":
+        throw Errors.igSessionInvalid();
+      case "CHALLENGE_REQUIRED":
+      case "CHECKPOINT_REQUIRED":
+        throw Errors.igChallenge();
+      case "IG_RATE_LIMITED":
+        throw Errors.igRateLimit();
+      default:
+        throw new AppError(
+          result.failureCode,
+          `Instagram error: ${result.failureCode}`,
+          503,
+        );
+    }
   }
   return result.profile;
 }

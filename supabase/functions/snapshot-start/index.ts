@@ -22,6 +22,7 @@ import { getIgCurrentUser }                    from "../_shared/instagram.ts";
 import { vaultRetrieve }                       from "../_shared/vault.ts";
 import { writeAuditEvent, extractIp }          from "../_shared/audit.ts";
 import { runSnapshotChunk, SnapshotJobRow }    from "../_shared/snapshotJob.ts";
+import { notifyOwnerOfError }                  from "../_shared/notify.ts";
 
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return corsPreflightResponse();
@@ -101,7 +102,27 @@ Deno.serve(async (req: Request) => {
     const profile = await getIgCurrentUser(cookie);
     const capturedAt = new Date().toISOString();
 
-    // ── 7. Create job row ─────────────────────────────────────
+    // ── 7. Check for a cached following list (only refresh once per 24 h) ──
+    // If the user has already run a snapshot today, reuse the following list
+    // from the most recent complete snapshot. The following phase in the job
+    // will detect the pre-filled list and skip the Instagram API fetch.
+    const followingWindowStart = new Date(Date.now() - 24 * 60 * 60 * 1_000).toISOString();
+    const { data: recentSnap } = await db
+      .from("follower_snapshots")
+      .select("following_json")
+      .eq("ig_account_id", igAccountId)
+      .gte("captured_at", followingWindowStart)
+      .order("captured_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    const cachedFollowing: unknown[] =
+      Array.isArray(recentSnap?.following_json) &&
+      (recentSnap.following_json as unknown[]).length > 0
+        ? (recentSnap.following_json as unknown[])
+        : [];
+
+    // ── 8. Create job row ─────────────────────────────────────
     const { data: jobRow, error: jobErr } = await db
       .from("snapshot_jobs")
       .insert({
@@ -111,7 +132,7 @@ Deno.serve(async (req: Request) => {
         status:              "running",
         phase:               "followers",
         followers_json:      [],
-        following_json:      [],
+        following_json:      cachedFollowing,   // pre-filled → following phase skipped if non-empty
         follower_count_api:  profile.follower_count,
         following_count_api: profile.following_count,
         post_count_api:      profile.post_count,
@@ -131,10 +152,10 @@ Deno.serve(async (req: Request) => {
 
     const job = jobRow as unknown as SnapshotJobRow;
 
-    // ── 8. Run first chunk ────────────────────────────────────
+    // ── 9. Run first chunk ────────────────────────────────────
     const result = await runSnapshotChunk(job, cookie, profile.ig_id);
 
-    // ── 9. Audit ──────────────────────────────────────────────
+    // ── 10. Audit ─────────────────────────────────────────────
     await writeAuditEvent({
       userId,
       igAccountId,
@@ -143,21 +164,48 @@ Deno.serve(async (req: Request) => {
       ipAddress: extractIp(req),
     }).catch(() => {});
 
-    return jsonResponse(result);
+    // Merge followingCached into the response so the app knows from the
+    // very first response whether the following list will be served from cache.
+    return jsonResponse({ ...result, followingCached: cachedFollowing.length > 0 });
 
   } catch (err) {
+    const code    = err instanceof AppError ? err.code : "INTERNAL_ERROR";
+    const message = (err as Error).message ?? "Unknown error";
+
     await writeAuditEvent({
       userId: userId ?? null,
       igAccountId: igAccountId ?? null,
       eventType: "snapshot_failed",
-      payload: { error_code: (err instanceof AppError ? err.code : "UNKNOWN"), message: String((err as Error).message) },
+      payload: { error_code: code, message },
     }).catch(() => {});
 
+    await notifyOwnerOfError({
+      source:      "snapshot-start",
+      userId,
+      igAccountId,
+      code,
+      message,
+      stack: (err as Error).stack ?? null,
+    });
+
     if (igAccountId && err instanceof AppError &&
-      (err.code === "IG_SESSION_INVALID" || err.code === "IG_CHALLENGE_REQUIRED")) {
+      (["IG_SESSION_INVALID", "IG_CHALLENGE_REQUIRED", "SESSION_EXPIRED",
+        "CHALLENGE_REQUIRED", "CHECKPOINT_REQUIRED"].includes(err.code))) {
       await adminClient()
         .from("ig_accounts")
         .update({ status: "token_expired", updated_at: new Date().toISOString() })
+        .eq("id", igAccountId)
+        .then(undefined, () => {});
+    }
+
+    // If Instagram explicitly rate-limited this session, extend the cooldown by
+    // an extra hour so the user doesn’t immediately retry and get blocked again.
+    const isRateLimited = code === "IG_RATE_LIMITED";
+    if (igAccountId && isRateLimited) {
+      const extendedAt = new Date(Date.now() + 60 * 60 * 1_000).toISOString();
+      await adminClient()
+        .from("ig_accounts")
+        .update({ last_snapshot_at: extendedAt, updated_at: new Date().toISOString() })
         .eq("id", igAccountId)
         .then(undefined, () => {});
     }

@@ -16,6 +16,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useQueryClient } from '@tanstack/react-query';
 
+import { useRouter } from 'expo-router';
 import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/store/authStore';
 import { useAdStore } from '@/store/adStore';
@@ -23,6 +24,7 @@ import { RemoveAdsSheet } from '@/components/RemoveAdsSheet';
 import C from '@/lib/colors';
 
 export default function SettingsScreen() {
+  const router = useRouter();
   const { user, igAccountId, setSession, setIgAccountId } = useAuthStore();
   const { adsRemovedUntil } = useAdStore();
   const adsActive = !adsRemovedUntil || Date.now() >= adsRemovedUntil;
@@ -198,6 +200,23 @@ export default function SettingsScreen() {
           onPress={handleSignOut}
         />
 
+        {/* Our Promise */}
+        <SectionHeader title="About" />
+        <ActionRow
+          icon="heart-circle-outline"
+          iconColor={C.teal}
+          title="Our Promise"
+          subtitle="What we stand for — and what we'll never do."
+          onPress={() => router.push('/our-promise')}
+        />
+        <ActionRow
+          icon="help-circle-outline"
+          iconColor={C.accent}
+          title="Troubleshooting"
+          subtitle="Common errors and how to fix them."
+          onPress={() => router.push('/troubleshooting')}
+        />
+
         <Text style={styles.version}>StayReel v1.0.0</Text>
       </ScrollView>
 
@@ -260,6 +279,7 @@ function ActionRow({ icon, iconColor, title, subtitle, onPress, loading, destruc
     </TouchableOpacity>
   );
 }
+
 
 // outer styles
 const styles = StyleSheet.create({

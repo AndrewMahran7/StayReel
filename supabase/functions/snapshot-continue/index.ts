@@ -18,6 +18,7 @@ import { requireAuth }                          from "../_shared/auth.ts";
 import { adminClient }                          from "../_shared/supabase_client.ts";
 import { vaultRetrieve }                        from "../_shared/vault.ts";
 import { runSnapshotChunk, SnapshotJobRow }     from "../_shared/snapshotJob.ts";
+import { notifyOwnerOfError }                  from "../_shared/notify.ts";
 
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return corsPreflightResponse();
@@ -97,9 +98,39 @@ Deno.serve(async (req: Request) => {
         .then(undefined, () => {});
     }
 
+    // If Instagram rate-limited mid-job, extend the cooldown by an extra hour
+    // so the user doesn’t immediately retry and get blocked again.
+    if (result.status === 'failed' && result.message?.includes("IG_RATE_LIMITED")) {
+      const extendedAt = new Date(Date.now() + 60 * 60 * 1_000).toISOString();
+      await db
+        .from("ig_accounts")
+        .update({ last_snapshot_at: extendedAt, updated_at: new Date().toISOString() })
+        .eq("id", job.ig_account_id)
+        .then(undefined, () => {});
+    }
+
+    // Notify owner if the job failed for a non-trivial reason
+    if (result.status === 'failed') {
+      await notifyOwnerOfError({
+        source:      "snapshot-continue",
+        userId:      caller.userId,
+        igAccountId: job.ig_account_id,
+        jobId:       job.id,
+        code:        result.message ?? "UNKNOWN",
+        message:     result.message ?? "Job failed during chunk processing",
+      });
+    }
+
     return jsonResponse(result);
 
   } catch (err) {
+    await notifyOwnerOfError({
+      source:  "snapshot-continue",
+      userId:  (err as { userId?: string }).userId ?? null,
+      code:    (err as { code?: string }).code ?? "INTERNAL_ERROR",
+      message: (err as Error).message ?? "Unknown error",
+      stack:   (err as Error).stack ?? null,
+    });
     return errorResponse(err);
   }
 });
