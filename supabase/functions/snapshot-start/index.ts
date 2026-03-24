@@ -58,11 +58,13 @@ Deno.serve(async (req: Request) => {
 
     const db = adminClient();
 
-    // ── 3b. Subscription / free-snapshot guard (defense-in-depth) ─
+    // ── 3b. Free-snapshot usage tracking (freemium model) ─────────
+    // Snapshots are now unlimited for free users (rate limits still
+    // protect the IG account). We just track usage for analytics.
     {
       const { data: prof } = await db
         .from("profiles")
-        .select("subscription_status, subscription_expires_at, free_snapshots_used, free_snapshot_limit")
+        .select("subscription_status, subscription_expires_at, free_snapshots_used")
         .eq("id", userId)
         .single();
 
@@ -71,12 +73,8 @@ Deno.serve(async (req: Request) => {
           && (!prof.subscription_expires_at || new Date(prof.subscription_expires_at) > new Date());
 
         if (!subActive) {
-          const used  = prof.free_snapshots_used  ?? 0;
-          const limit = prof.free_snapshot_limit   ?? 1;
-          if (used >= limit) {
-            throw Errors.forbidden("Subscription required. Please upgrade to StayReel Pro.");
-          }
-          // Increment free snapshot usage
+          const used = prof.free_snapshots_used ?? 0;
+          // Track usage (no longer blocks)
           await db
             .from("profiles")
             .update({ free_snapshots_used: used + 1 })

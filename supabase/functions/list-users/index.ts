@@ -14,6 +14,9 @@ import { adminClient } from "../_shared/supabase_client.ts";
 
 const PAGE_SIZE = 50;
 
+/** Number of preview items free users can see per list. */
+const FREE_PREVIEW_LIMIT = 10;
+
 type ListType =
   | "new_followers"
   | "lost_followers"
@@ -126,6 +129,26 @@ Deno.serve(async (req: Request) => {
       );
     }
 
+    // ── Subscription check (freemium gating) ──────────────────
+    // Free users see only a preview; pro users get the full list.
+    const { data: profile } = await adminClient()
+      .from("profiles")
+      .select("subscription_status, subscription_expires_at")
+      .eq("id", caller.userId)
+      .maybeSingle();
+
+    const subActive = profile
+      && ["active", "trial"].includes(profile.subscription_status ?? "")
+      && (!profile.subscription_expires_at || new Date(profile.subscription_expires_at) > new Date());
+    const isFreeUser = !subActive;
+
+    const totalCount = allItems.length;
+
+    // Free users only get the first FREE_PREVIEW_LIMIT items
+    if (isFreeUser && allItems.length > FREE_PREVIEW_LIMIT) {
+      allItems = allItems.slice(0, FREE_PREVIEW_LIMIT);
+    }
+
     // ── Paginate ──────────────────────────────────────────────
     const start    = page * PAGE_SIZE;
     const slice    = allItems.slice(start, start + PAGE_SIZE);
@@ -133,9 +156,10 @@ Deno.serve(async (req: Request) => {
 
     return jsonResponse({
       items:      slice,
-      total:      allItems.length,
+      total:      totalCount,
       page,
       next_page:  nextPage,
+      is_limited: isFreeUser && totalCount > FREE_PREVIEW_LIMIT,
     });
   } catch (err) {
     return errorResponse(err);

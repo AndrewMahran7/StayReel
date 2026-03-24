@@ -1,8 +1,28 @@
-import { Redirect } from 'expo-router';
+// app/index.tsx
+// Root route — renders a splash/loading screen while auth hydrates.
+//
+// ⚠️  DO NOT put a <Redirect> here. AuthGuard in _layout.tsx handles
+//     all navigation once `initialised` is true. A premature redirect
+//     causes a flash-to-login on cold open even when a valid session
+//     exists in AsyncStorage.
 
-// Root index — AuthGuard in _layout.tsx handles all real navigation.
-// This just gives Expo Router a matched route for "/" so it doesn't
-// show "Unmatched Route" before the guard fires.
+import React from 'react';
+import { View, ActivityIndicator, StyleSheet } from 'react-native';
+import C from '@/lib/colors';
+
 export default function Index() {
-  return <Redirect href="/(auth)/sign-in" />;
+  return (
+    <View style={styles.container}>
+      <ActivityIndicator size="large" color={C.accent} />
+    </View>
+  );
 }
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: C.black,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+});

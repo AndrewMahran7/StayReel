@@ -22,6 +22,8 @@ export interface IgUser {
 interface FetchListPage {
   items:    IgUser[];
   nextPage: number | null;
+  total:    number;
+  isLimited: boolean;
 }
 
 async function fetchListPage(
@@ -55,9 +57,24 @@ async function fetchListPage(
   }
 
   const json = await res.json();
+
+  // ── DEBUG: log raw server response for freemium gating diagnosis ──
+  if (__DEV__) {
+    console.log('[useListData] raw response:', {
+      listType,
+      page,
+      itemCount:  (json.items ?? []).length,
+      total:      json.total,
+      is_limited: json.is_limited,
+      next_page:  json.next_page,
+    });
+  }
+
   return {
-    items:    json.items    ?? [],
-    nextPage: json.next_page ?? null,
+    items:     json.items      ?? [],
+    nextPage:  json.next_page  ?? null,
+    total:     json.total      ?? 0,
+    isLimited: json.is_limited ?? false,
   };
 }
 

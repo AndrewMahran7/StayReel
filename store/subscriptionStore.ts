@@ -1,7 +1,7 @@
 // store/subscriptionStore.ts
 // Tracks subscription status and free-snapshot usage.
 // Hydrated from Supabase profile + RevenueCat on app launch.
-// Used by the dashboard to decide whether to show the paywall.
+// Used by lists and dashboard for freemium gating (lists are gated, snapshots are free).
 
 import { create } from 'zustand';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -17,7 +17,9 @@ import {
 import type { CustomerInfo } from 'react-native-purchases';
 
 // ── Constants ──────────────────────────────────────────────────
-const FREE_SNAPSHOT_LIMIT = 1;
+// Freemium model: snapshots are unlimited (within rate limits).
+// The paywall gates *list visibility* instead of snapshot access.
+const FREE_SNAPSHOT_LIMIT = 999;
 const LOCAL_KEY = '@stayreel:free_snapshots_used';
 
 // ── Types ──────────────────────────────────────────────────────
@@ -171,12 +173,14 @@ export const useSubscriptionStore = create<SubscriptionState>()((set, get) => ({
 
   /**
    * Returns true if the user is allowed to take a snapshot.
-   * Pro users always can. Free users can until they hit the limit.
+   *
+   * Freemium model: snapshots are never gated by subscription status.
+   * Rate-limits (hourly cooldown, daily cap) are enforced server-side
+   * in rate_limit.ts — this method is kept for backward compatibility
+   * but always returns true.
    */
   canTakeSnapshot(): boolean {
-    const { isPro, freeSnapshotsUsed, freeSnapshotLimit } = get();
-    if (isPro) return true;
-    return freeSnapshotsUsed < freeSnapshotLimit;
+    return true;
   },
 
   /**

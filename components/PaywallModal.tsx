@@ -7,7 +7,7 @@
 // The same <PaywallModal visible onClose /> API is preserved so
 // dashboard.tsx and settings.tsx don't need structural changes.
 
-import React from 'react';
+import React, { useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -22,6 +22,7 @@ import RevenueCatUI from 'react-native-purchases-ui';
 
 import { isRevenueCatConfigured, getRevenueCatConfigError, isProFromInfo } from '@/lib/revenueCat';
 import { useSubscriptionStore } from '@/store/subscriptionStore';
+import { trackEvent }           from '@/lib/analytics';
 import C from '@/lib/colors';
 
 interface Props {
@@ -31,6 +32,16 @@ interface Props {
 
 export function PaywallModal({ visible, onClose }: Props) {
   const setProFromInfo = useSubscriptionStore((s) => s.setProFromInfo);
+
+  // Track paywall impression once per open
+  const trackedRef = useRef(false);
+  useEffect(() => {
+    if (visible && !trackedRef.current) {
+      trackedRef.current = true;
+      trackEvent('paywall_opened');
+    }
+    if (!visible) trackedRef.current = false;
+  }, [visible]);
 
   if (!visible) return null;
 
@@ -93,6 +104,9 @@ export function PaywallModal({ visible, onClose }: Props) {
         <RevenueCatUI.Paywall
           options={{ displayCloseButton: true }}
           onPurchaseCompleted={({ customerInfo }) => {
+            trackEvent('purchase_completed', {
+              entitlements: Object.keys(customerInfo.entitlements.active),
+            });
             setProFromInfo(customerInfo);
             onClose();
           }}

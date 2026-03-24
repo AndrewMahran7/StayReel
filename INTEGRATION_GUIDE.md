@@ -380,8 +380,8 @@ Your webhook handles these (already coded in `rc-webhook/index.ts`):
 ### 4B. Test Purchase Flow — Step by Step
 
 1. **Open the app** → sign in → you should see RevenueCat config logs in the console.
-2. **Take your free snapshot** → completes → paywall appears after 3 seconds.
-3. **Tap a plan** on the paywall → Apple's sandbox payment sheet appears → confirm with the sandbox account password → Pay.
+2. **Take a snapshot** → completes → view a list tab → free users see 10 results + locked rows + upgrade CTA.
+3. **Tap "Unlock all"** on the upgrade card → paywall appears → Apple's sandbox payment sheet → confirm with sandbox account password → Pay.
 4. **After purchase:**
    - `onPurchaseCompleted` fires → `setProFromInfo` updates store → `isPro: true`
    - Paywall closes
@@ -448,7 +448,7 @@ Apple will reject your app if any of these are missing:
 - ✅ **Terms of Service link** — visible before purchase and in Settings.
 - ✅ **Privacy Policy link** — same as above.
 - ✅ **Subscription terms in the paywall** — auto-renewal terms, pricing, and cancellation info must be visible near the purchase button. RevenueCat Paywalls include this automatically.
-- ✅ **No "pay to unlock basic functionality"** — Apple may reject if free users get essentially nothing. Your app gives 1 free snapshot, which demonstrates value.
+- ✅ **No "pay to unlock basic functionality"** — Apple may reject if free users get essentially nothing. Free users get unlimited snapshots and see the first 10 results in every list, demonstrating clear value.
 
 ---
 
@@ -499,7 +499,7 @@ Apple will reject your app if any of these are missing:
 ### 5C. Things That Will Get You Rejected
 
 - **No restore purchases option** — always needed, even for non-consumables.
-- **Forcing login before showing the paywall** — Apple wants users to see what the app does before requiring account creation. (Your flow: auth → free snapshot → paywall is fine.)
+- **Forcing login before showing the paywall** — Apple wants users to see what the app does before requiring account creation. (Your flow: auth → snapshot → lists → optional upgrade is fine.)
 - **No way to cancel** — must either link to system subscription settings or use Customer Center.
 - **Paywall with no Terms of Use / Privacy Policy** — RC native paywalls include this automatically.
 - **Subscription description doesn't match what the app does** — keep the App Store product descriptions accurate.

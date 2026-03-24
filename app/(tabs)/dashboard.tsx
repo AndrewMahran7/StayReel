@@ -33,6 +33,8 @@ import { useSchoolPrompt }                     from '@/hooks/useSchoolPrompt';
 import C                                       from '@/lib/colors';
 import type { ListType }                       from '@/hooks/useListData';
 import { TapTheDotGameModal }                  from '@/components/TapTheDotGameModal';
+import { recordSuccessfulSnapshot }            from '@/hooks/useReviewPrompt';
+import { trackEvent }                          from '@/lib/analytics';
 
 // â”€â”€ Countdown hook â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 function useCountdown(targetIso: string | null): string | null {
@@ -85,8 +87,7 @@ export default function DashboardScreen() {
   const setPendingListType                     = useAuthStore((s) => s.setPendingListType);
   const user                                   = useAuthStore((s) => s.user);
 
-  // Subscription / paywall
-  const canTakeSnapshot     = useSubscriptionStore((s) => s.canTakeSnapshot);
+  // Subscription (freemium: snapshots always allowed, lists gated)
   const isPro               = useSubscriptionStore((s) => s.isPro);
   const incrementFreeUsage  = useSubscriptionStore((s) => s.incrementFreeUsage);
   const [paywallOpen, setPaywallOpen] = useState(false);
@@ -107,6 +108,27 @@ export default function DashboardScreen() {
   const nextAllowedAt  = overrideNextAt ?? data?.next_snapshot_allowed_at ?? null;
   const countdown      = useCountdown(nextAllowedAt);
   const isLimited      = countdown !== null;
+
+  // ── Staged progress narrative ─────────────────────────────────
+  // Maps real job phase data to a 4-stage human-readable flow.
+  // Every label is truthful — no stage claims completion before its time.
+  const stage = (() => {
+    const p = capture.progress;
+    if (!p.phase) return { step: 1, label: 'Connecting',   headline: 'Connecting to Instagram\u2026',   subtitle: 'Establishing a secure session',                                                         pct: 0.02 };
+    if (p.phase === 'followers') {
+      const detail = p.followerCountApi > 0
+        ? `${p.followersSeen.toLocaleString()} of ~${p.followerCountApi.toLocaleString()} followers`
+        : `${p.followersSeen.toLocaleString()} followers so far`;
+      const pct = p.followerCountApi > 0 ? Math.min(0.55, (p.followersSeen / p.followerCountApi) * 0.55) : 0.15;
+      return { step: 2, label: 'Scanning',     headline: 'Scanning your followers\u2026',     subtitle: detail,                                                                                       pct: Math.max(0.05, pct) };
+    }
+    if (p.phase === 'following') {
+      const detail = p.followingCached ? 'Using cached following list \u2713' : `${p.followingSeen.toLocaleString()} following so far`;
+      return { step: 3, label: 'Comparing',    headline: 'Comparing relationships\u2026',    subtitle: detail,                                                                                       pct: p.followingCached ? 0.85 : 0.65 };
+    }
+    // finalize
+    return { step: 4, label: 'Building',    headline: 'Building your report\u2026',       subtitle: 'Crunching the numbers',                                                                     pct: 0.95 };
+  })();
 
   // Clear override once the server confirms it's gone
   useEffect(() => {
@@ -149,11 +171,8 @@ export default function DashboardScreen() {
   const handleCapture = async () => {
     if (isLimited) return;
 
-    // Paywall gate: check subscription before allowing snapshot
-    if (!canTakeSnapshot()) {
-      setPaywallOpen(true);
-      return;
-    }
+    // Paywall gate removed — freemium model allows unlimited snapshots.
+    // Lists are gated instead.
 
     await new Promise<void>((resolve) =>
       Alert.alert(
@@ -167,17 +186,27 @@ export default function DashboardScreen() {
     setCapturing(true);
     setSnapshotDone(false);
     setSnapshotErr(null);
+    trackEvent('snapshot_started', { is_pro: isPro });
     try {
       await capture.mutateAsync();
       setOverrideNextAt(null);
 
-      // Track free snapshot usage (no-op for pro users)
+      // Track free snapshot usage for analytics (no-op for pro users)
       if (!isPro) {
         incrementFreeUsage().catch(() => {});
-        // Show paywall after a short delay so the user can see their results first
-        setTimeout(() => setPaywallOpen(true), 3000);
       }
+
+      // Record successful snapshot for review-prompt eligibility
+      // (the actual prompt fires from lists.tsx when the user views results)
+      recordSuccessfulSnapshot();
+
+      trackEvent('snapshot_completed', { is_pro: isPro });
     } catch (err: any) {
+      trackEvent('snapshot_failed', {
+        is_pro: isPro,
+        error:  err?.message ?? 'unknown',
+        is_rate_limit: err instanceof SnapshotLimitError,
+      });
       if (err instanceof SnapshotLimitError) {
         setOverrideNextAt(err.nextAllowedAt);
       }
@@ -241,17 +270,7 @@ export default function DashboardScreen() {
             {capturing || capture.isPending ? (
               <>
                 <ActivityIndicator size="small" color="#fff" />
-                <Text style={styles.captureBtnText}>
-                  {capture.progress.phase === 'followers'
-                    ? capture.progress.followerCountApi > 0
-                      ? `Followers ${Math.min(99, Math.round(capture.progress.followersSeen / capture.progress.followerCountApi * 100))}%`
-                      : `Followers ${capture.progress.followersSeen}…`
-                    : capture.progress.phase === 'following'
-                    ? `Following ${capture.progress.followingSeen}…`
-                    : capture.progress.phase === 'finalize'
-                    ? 'Saving…'
-                    : 'Starting…'}
-                </Text>
+                <Text style={styles.captureBtnText}>{stage.label}\u2026</Text>
               </>
             ) : isLimited ? (
               <>
@@ -287,27 +306,49 @@ export default function DashboardScreen() {
               </Text>
             </View>
 
-            {/* live progress line */}
+            {/* Step indicators — 4 dots showing which stage we're on */}
+            <View style={styles.stepsRow}>
+              {(['Connecting', 'Scanning', 'Comparing', 'Building'] as const).map((lbl, i) => {
+                const stepNum = i + 1;
+                const done    = stage.step > stepNum;
+                const active  = stage.step === stepNum;
+                return (
+                  <View key={lbl} style={styles.stepItem}>
+                    <View style={[
+                      styles.stepDot,
+                      done   && styles.stepDotDone,
+                      active && styles.stepDotActive,
+                    ]}>
+                      {done ? (
+                        <Ionicons name="checkmark" size={10} color="#fff" />
+                      ) : (
+                        <Text style={[
+                          styles.stepDotText,
+                          active && styles.stepDotTextActive,
+                        ]}>{stepNum}</Text>
+                      )}
+                    </View>
+                    <Text style={[
+                      styles.stepLabel,
+                      (done || active) && styles.stepLabelActive,
+                    ]}>{lbl}</Text>
+                  </View>
+                );
+              })}
+            </View>
+
+            {/* Narrative headline + real data subtitle */}
             <View style={styles.progressBanner}>
-              <ActivityIndicator size="small" color={C.accent} style={{ marginRight: 8 }} />
+              <ActivityIndicator size="small" color={C.accent} style={{ marginRight: 10 }} />
               <View style={{ flex: 1 }}>
-                <Text style={styles.progressTitle}>
-                  {capture.progress.phase === 'followers'
-                    ? capture.progress.followerCountApi > 0
-                      ? `Fetching followers — ${capture.progress.followersSeen} of ~${capture.progress.followerCountApi}`
-                      : `Fetching followers — ${capture.progress.followersSeen} so far`
-                    : capture.progress.phase === 'following'
-                    ? `Fetching following — ${capture.progress.followingSeen} so far`
-                    : capture.progress.phase === 'finalize'
-                    ? 'Saving snapshot…'
-                    : 'Starting snapshot…'}
-                </Text>
-                {capture.progress.pagesDone > 0 && (
-                  <Text style={styles.progressSub}>
-                    {capture.progress.pagesDone} page{capture.progress.pagesDone !== 1 ? 's' : ''} fetched
-                  </Text>
-                )}
+                <Text style={styles.progressTitle}>{stage.headline}</Text>
+                <Text style={styles.progressSub}>{stage.subtitle}</Text>
               </View>
+            </View>
+
+            {/* Visual progress bar */}
+            <View style={styles.progressBarBg}>
+              <View style={[styles.progressBarFill, { width: `${Math.round(stage.pct * 100)}%` }]} />
             </View>
 
             {/* cached following note */}
@@ -432,6 +473,24 @@ export default function DashboardScreen() {
           />
         ))}
 
+        {/* Soft upgrade CTA for free users */}
+        {data && !isPro && (
+          <TouchableOpacity
+            style={styles.upgradeCta}
+            onPress={() => setPaywallOpen(true)}
+            activeOpacity={0.85}
+          >
+            <Ionicons name="lock-open-outline" size={18} color={C.accent} />
+            <View style={{ flex: 1, marginLeft: 10 }}>
+              <Text style={styles.upgradeTitle}>Unlock full lists</Text>
+              <Text style={styles.upgradeSub}>
+                See all your ghost followers, new followers, and more with StayReel Pro
+              </Text>
+            </View>
+            <Ionicons name="chevron-forward" size={18} color={C.textMuted} />
+          </TouchableOpacity>
+        )}
+
         {/* â”€â”€ First-snapshot hint â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
         {data && !data.has_diff && (
           <View style={styles.hintBox}>
@@ -456,7 +515,7 @@ export default function DashboardScreen() {
         )}
       </ScrollView>
 
-      {/* Paywall modal – shown when free user tries to take another snapshot */}
+      {/* Paywall modal – shown when free user taps upgrade CTA */}
       <PaywallModal visible={paywallOpen} onClose={() => setPaywallOpen(false)} />
 
       {/* School attribution modal – shown once for new users */}
@@ -542,19 +601,34 @@ const styles = StyleSheet.create({
   progressBanner: {
     flexDirection: 'row',
     alignItems:    'center',
-    padding:       12,
+    padding:       14,
     borderLeftWidth: 3,
     borderLeftColor: C.accent,
   },
   progressTitle: {
     color:      C.textPrimary,
-    fontSize:   13,
-    fontWeight: '600',
+    fontSize:   15,
+    fontWeight: '700',
+    letterSpacing: -0.2,
   },
   progressSub: {
-    color:      C.textMuted,
-    fontSize:   11,
-    marginTop:  2,
+    color:      C.textSecondary,
+    fontSize:   12,
+    marginTop:  3,
+  },
+
+  progressBarBg: {
+    height:           4,
+    backgroundColor:  C.surfaceAlt,
+    marginHorizontal: 12,
+    marginBottom:     8,
+    borderRadius:     2,
+    overflow:         'hidden',
+  },
+  progressBarFill: {
+    height:           '100%' as any,
+    backgroundColor:  C.accent,
+    borderRadius:     2,
   },
 
   cachedFollowingRow: {
@@ -571,6 +645,54 @@ const styles = StyleSheet.create({
     fontSize:   12,
     flex:       1,
     lineHeight: 17,
+  },
+
+  // Step indicators
+  stepsRow: {
+    flexDirection:     'row',
+    justifyContent:    'space-between',
+    paddingHorizontal: 16,
+    paddingTop:        14,
+    paddingBottom:     6,
+  },
+  stepItem: {
+    alignItems: 'center',
+    flex:       1,
+  },
+  stepDot: {
+    width:           22,
+    height:          22,
+    borderRadius:    11,
+    backgroundColor: C.surfaceAlt,
+    borderWidth:     1,
+    borderColor:     C.border,
+    alignItems:      'center',
+    justifyContent:  'center',
+  },
+  stepDotActive: {
+    backgroundColor: C.accentDim,
+    borderColor:     C.accent,
+  },
+  stepDotDone: {
+    backgroundColor: C.accent,
+    borderColor:     C.accent,
+  },
+  stepDotText: {
+    color:      C.textMuted,
+    fontSize:   10,
+    fontWeight: '700',
+  },
+  stepDotTextActive: {
+    color: C.accent,
+  },
+  stepLabel: {
+    color:      C.textMuted,
+    fontSize:   10,
+    marginTop:  4,
+  },
+  stepLabelActive: {
+    color:      C.textPrimary,
+    fontWeight: '600',
   },
 
   playGameBtn: {
@@ -656,5 +778,27 @@ const styles = StyleSheet.create({
     maxWidth:   260,
   },
   emptyBold: { color: C.textPrimary, fontWeight: '600' },
+
+  upgradeCta: {
+    flexDirection:    'row',
+    alignItems:       'center',
+    backgroundColor:  C.surface,
+    borderRadius:     14,
+    borderWidth:      1,
+    borderColor:      C.border,
+    padding:          14,
+    marginBottom:     14,
+  },
+  upgradeTitle: {
+    color:      C.textPrimary,
+    fontSize:   15,
+    fontWeight: '700',
+  },
+  upgradeSub: {
+    color:      C.textMuted,
+    fontSize:   12,
+    marginTop:  2,
+    lineHeight: 17,
+  },
 });
 

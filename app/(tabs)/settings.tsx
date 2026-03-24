@@ -222,7 +222,7 @@ export default function SettingsScreen() {
             icon="rocket-outline"
             iconColor={C.accent}
             title="Upgrade to Pro"
-            subtitle="Unlimited snapshots & more"
+            subtitle="See your full follower lists & more"
             onPress={() => setShowPaywall(true)}
           />
         )}

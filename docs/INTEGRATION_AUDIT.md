@@ -33,8 +33,8 @@
 - **`store/subscriptionStore.ts`** — Zustand store: hydrate from Supabase + RevenueCat, free-snapshot tracking
 - **`components/PaywallModal.tsx`** — full-screen paywall with yearly/monthly plan toggle
 - **`rc-webhook/`** — RevenueCat server-to-server webhook edge function
-- **Server-side gate** in `snapshot-start/index.ts` — enforces free limit before capture
-- **Dashboard integration** — `canTakeSnapshot()` check, `incrementFreeUsage()` after success
+- **Server-side tracking** in `snapshot-start/index.ts` — increments `free_snapshots_used` for analytics (no longer blocks)
+- **Dashboard integration** — `incrementFreeUsage()` after success, soft upgrade CTA for free users
 - **Settings integration** — subscription section with plan display, manage/upgrade buttons
 - **Migration 015** — `profiles.rc_customer_id`, `subscription_status`, `subscription_expires_at`, `free_snapshots_used`, `free_snapshot_limit`
 
@@ -185,9 +185,9 @@ All client-side logs use consistent `[Tag]` prefixes. No loops, no render-freque
 - [ ] **Expired session (server)** — from Dashboard, trigger capture → SnapshotErrorCard with "Reconnect" if `token_expired`
 
 ### Snapshot Capture
-- [ ] **First free snapshot** — tap "Daily Snapshot" → progress card appears → completes → metrics update
-- [ ] **Paywall after free limit** — tap "Daily Snapshot" again → Alert: "Upgrade to Pro" → PaywallModal opens
-- [ ] **Pro user** — subscribe → can take unlimited snapshots
+- [ ] **Snapshot (any user)** — tap "Take Snapshot" → progress card appears → completes → metrics update
+- [ ] **List gating (free user)** — open a list tab → see 10 results + locked rows + "Unlock all" CTA → tapping opens PaywallModal
+- [ ] **Pro user** — subscribe → full lists visible, no locked rows
 - [ ] **1-hour cooldown** — after a snapshot, button shows countdown timer
 - [ ] **Large account (>1000 followers)** — progress card shows phase transitions (followers → following → finalize)
 - [ ] **Tap the Dot game** — "Play while loading" button appears during capture → game works, score persists

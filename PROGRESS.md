@@ -186,8 +186,8 @@ store/
 
 ### Subscription Paywall (RevenueCat)
 -  **Paywall modal** — yearly / monthly plan toggle, purchase + restore flows
--  **Free snapshot limit** — 1 free snapshot, then paywall gate (enforced client-side + server-side)
--  **Server-side gate** — `snapshot-start` checks `subscription_status` and `free_snapshots_used`
+-  **Freemium list gating** — snapshots free for all; lists show 10 items then locked rows + upgrade CTA
+-  **Server-side truncation** — `list-users` enforces `FREE_PREVIEW_LIMIT = 10` for non-pro users
 -  **RevenueCat webhook** — `rc-webhook` edge function syncs `subscription_status` & `subscription_expires_at`
 -  **Subscription hydration** — loaded from Supabase + RevenueCat on boot and on warm sign-in
 -  **Settings integration** — plan display, manage/upgrade buttons
@@ -231,7 +231,7 @@ store/
 
 ### Completed (Tasks 4–7)
 - [x] **Push notifications** — full MVP with deferred prompt, foreground suppression, weekly summary
-- [x] **Subscription paywall** — RevenueCat integration, free-snapshot gating, webhook
+- [x] **Subscription paywall** — RevenueCat integration, freemium list gating, webhook
 - [x] **School attribution** — ambassador tracking with school picker + "Don't ask again"
 - [x] **Notification audit** — dedup prevention, sign-out cleanup, honest copy
 
