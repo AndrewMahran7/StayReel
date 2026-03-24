@@ -9,11 +9,11 @@ StayReel is an Instagram follower-tracking app. Users connect their Instagram ac
 
 ## Architecture
 
-### Database (Supabase  all 13 migrations applied)
+### Database (Supabase — all 16 migrations applied)
 
 | Table | Purpose |
 |---|---|
-| `profiles` | One row per auth user (auto-created by trigger on `auth.users`) |
+| `profiles` | One row per auth user (auto-created by trigger on `auth.users`). Now also stores `push_token`, `rc_customer_id`, `subscription_status`, `subscription_expires_at`, `free_snapshots_used`, `free_snapshot_limit`, `school`, `school_do_not_ask`, `referral_source` |
 | `ig_accounts` | Connected Instagram accounts (vault_secret_id, status, username, streak) |
 | `follower_snapshots` | Each capture: raw `followers_json`, `following_json` arrays + counts |
 | `follower_edges` | Normalised per-follower rows (indexed for set-diff queries) |
@@ -21,7 +21,7 @@ StayReel is an Instagram follower-tracking app. Users connect their Instagram ac
 | `snapshot_quota` | Per-user daily quota counter (legacy; superseded by 1-hour cooldown) |
 | `snapshot_jobs` | Resumable chunked job state (cursor, phase, accumulated JSON) |
 | `audit_events` | Immutable log of every significant event |
-| `user_settings` | Per-user preferences (consent, ads removed, etc.) |
+| `user_settings` | Per-user preferences (consent, ads removed, `notify_weekly_summary`, `notify_refresh_complete`) |
 
 Row Level Security is enabled on every table. All Edge Functions use the service-role `adminClient` internally.
 
@@ -30,21 +30,27 @@ Row Level Security is enabled on every table. All Edge Functions use the service
 | Function | Method | Purpose |
 |---|---|---|
 | `connect-instagram` | POST | Receives session cookie, stores in Vault, upserts `ig_accounts` + `profiles` |
-| `snapshot-start` | POST | Creates a `snapshot_jobs` row and runs the first follower chunk |
+| `snapshot-start` | POST | Creates a `snapshot_jobs` row and runs the first follower chunk. Enforces free-snapshot limit for non-pro users. |
 | `snapshot-continue` | POST | Runs the next chunk for a running job (polled every ~1 s by the app) |
 | `capture-snapshot` | POST | Legacy single-call capture (used by cron / onboarding) |
 | `diffs-latest` | GET | Dashboard metrics + `next_snapshot_allowed_at` (1-hour cooldown) |
 | `list-users` | GET | Paginated follower lists (5 types) |
 | `snapshot-history` | GET | Historical snapshot counts for growth chart |
 | `status` | GET | Health check |
-| `admin-reset-quota` | POST | **Dev only**  resets quota and optionally clears snapshot data |
+| `admin-reset-quota` | POST | **Dev only** — resets quota and optionally clears snapshot data |
+| `send-notification` | POST | Generic push notification sender |
+| `weekly-summary-notify` | POST | Cron-triggered weekly follower summary push |
+| `rc-webhook` | POST | RevenueCat subscription lifecycle webhook |
+| `unfollow-user` | POST | Unfollow a user on Instagram |
 
 ### Shared modules (`supabase/functions/_shared/`)
 
 | Module | Purpose |
 |---|---|
 | `instagram.ts` | Instagram private API: `fetchUserList`, `fetchEdgeListChunked`, failure catalogue |
-| `snapshotJob.ts` | `runSnapshotChunk`  core worker for the resumable job system |
+| `snapshotJob.ts` | `runSnapshotChunk` — core worker for the resumable job system + completion push (dedup via `completed_notified_at`) |
+| `push.ts` | Expo Push API helper for sending push notifications |
+| `notify.ts` | Email (Resend) + push multiplexer |
 | `rate_limit.ts` | `checkAndEnforce24hLimit` (now 1-hour cooldown) |
 | `diff.ts` / `diff_writer.ts` | Compute and persist follower diffs |
 | `auth.ts` / `vault.ts` / `errors.ts` / `cors.ts` / `audit.ts` | Utilities |
@@ -60,9 +66,11 @@ app/
   (tabs)/
     dashboard.tsx         5 metric cards, net follower callout, growth chart,
                            streak badge, weekly summary, manual refresh with
-                           live progress card + "Tap the Dot" mini-game
+                           live progress card + "Tap the Dot" mini-game,
+                           paywall gate, school attribution prompt
     lists.tsx             searchable, paginated user list (5 tab types)
-    settings.tsx          disconnect IG, delete data, remove-ads, consent
+    settings.tsx          disconnect IG, delete data, remove-ads, consent,
+                           subscription section, notification toggles, school picker
 
 components/
   DashboardCard.tsx       stat card (left-accent border, icon, count, chevron)
@@ -70,25 +78,38 @@ components/
   BannerAdView.tsx        AdMob banner (respects consent + remove-ads state)
   ConsentModal.tsx        GDPR/ATT consent sheet
   RemoveAdsSheet.tsx      remove-ads reward flow
+  PaywallModal.tsx        RevenueCat paywall with yearly/monthly plans
+  SchoolPickerModal.tsx   school / university picker for ambassador tracking
   SearchBar.tsx
   GrowthChart.tsx         follower count line chart (7d / 30d toggle)
   StatsRow.tsx            Followers / Following / Friends pill row
   StreakBadge.tsx         current + longest streak
   WeeklySummaryCard.tsx   7-day new/lost summary
   TapTheDotGameModal.tsx  "Tap the Dot" mini-game shown during snapshot loading
+  SnapshotErrorCard.tsx   error display for failed snapshots
 
 hooks/
   useDashboard.ts         fetches diffs-latest, maps to DiffSummary
   useListData.ts          infinite query against list-users
-  useSnapshotCapture.ts   start job  poll snapshot-continue  done
+  useSnapshotCapture.ts   start job → poll snapshot-continue → done
   useSnapshotHistory.ts   historical counts for GrowthChart
   useTapDotHighScore.ts   AsyncStorage high-score for mini-game
   useInterstitialAd.ts    frequency-capped interstitial
   useRewardedAd.ts        rewarded ad for remove-ads flow
+  useNotifications.ts     boot-time token re-registration + tap handling
+  useNotificationSettings.ts  per-toggle notification prefs (React Query)
+  useSchoolPrompt.ts      auto-prompt logic for school picker
+  useUnfollowUser.ts      unfollow UI action
+
+lib/
+  notifications.ts        push registration, foreground handler, token management
+  revenueCat.ts           RevenueCat SDK init, entitlement, offerings, purchases
+  schools.ts              SCHOOLS array + schoolLabel() helper
 
 store/
   authStore.ts            user session + igAccountId (Zustand + AsyncStorage)
   adStore.ts              consent state, ads-removed expiry, list-open counter
+  subscriptionStore.ts    subscription status + free-snapshot tracking (Zustand)
 ```
 
 ---
@@ -149,6 +170,32 @@ store/
 -  Delete all data
 -  Remove Ads IAP sheet
 -  Consent toggle
+-  School row (Account section) — shows current school, opens picker
+-  Subscription section — plan display, manage/upgrade CTA
+-  Notification toggles — Weekly summary, Refresh complete, New follower (active); Session expiry ("Coming soon", disabled)
+-  Sign-out clears push token from Supabase profile
+
+### Push Notifications
+-  **Deferred OS prompt** — first-time users see the permission dialog only after their first snapshot (value moment)
+-  **Silent re-registration** — returning users' tokens are synced on boot without triggering the dialog
+-  **Snapshot-complete push** — sent server-side with duplicate prevention (`completed_notified_at`)
+-  **Foreground suppression** — during active capture, `screen=dashboard` pushes are suppressed locally
+-  **Notification tap routing** — tapping a push opens the correct screen (dashboard / lists / settings)
+-  **Weekly summary push** — `weekly-summary-notify` edge function (cron-triggered)
+-  **Sign-out token clearing** — `unregisterPushToken()` on explicit sign-out
+
+### Subscription Paywall (RevenueCat)
+-  **Paywall modal** — yearly / monthly plan toggle, purchase + restore flows
+-  **Free snapshot limit** — 1 free snapshot, then paywall gate (enforced client-side + server-side)
+-  **Server-side gate** — `snapshot-start` checks `subscription_status` and `free_snapshots_used`
+-  **RevenueCat webhook** — `rc-webhook` edge function syncs `subscription_status` & `subscription_expires_at`
+-  **Subscription hydration** — loaded from Supabase + RevenueCat on boot and on warm sign-in
+-  **Settings integration** — plan display, manage/upgrade buttons
+
+### School Attribution
+-  **Auto-prompt** — SchoolPickerModal appears on first dashboard visit when school is unset
+-  **"Don't ask again"** — sets `school_do_not_ask = TRUE`, suppresses future prompts
+-  **Settings integration** — school row in Account section, tappable to change
 
 ---
 
@@ -165,22 +212,28 @@ store/
 ## Still To Do
 
 ### High Priority
-- [ ] **Incomplete snapshot warning**  surface `is_list_complete` in Dashboard/Lists UI
-- [ ] **Reconnect prompt**  when session expired, show "Reconnect Instagram" CTA from Dashboard
+- [ ] **Incomplete snapshot warning** — surface `is_list_complete` in Dashboard/Lists UI
+- [ ] **Reconnect prompt** — when session expired, show "Reconnect Instagram" CTA from Dashboard
 - [ ] **Remove `admin-reset-quota`** or add secret-key guard before public release
 
 ### Medium Priority
-- [ ] **Push notifications**  notify on new followers/unfollowers (requires cron + push token table)
-- [ ] **Cron snapshot**  automated hourly/daily capture via pg_cron or GitHub Actions
-- [ ] **Second snapshot onboarding nudge**  persistent card after first refresh
-- [ ] **List sorting**  AZ or date added
-- [ ] **Pull-to-refresh on Lists**  currently only refreshes on tab mount
+- [ ] **Cron snapshot** — automated hourly/daily capture via pg_cron or GitHub Actions
+- [ ] **Second snapshot onboarding nudge** — persistent card after first refresh
+- [ ] **List sorting** — AZ or date added
+- [ ] **Pull-to-refresh on Lists** — currently only refreshes on tab mount
+- [ ] **Session expiry notification** — implement `notify_on_token_expiry` toggle (currently "Coming soon")
 
 ### Low Priority / Polish
-- [ ] **Real AdMob product IDs**  replace placeholders in `lib/adUnits.ts`
-- [ ] **Error boundary**  global React error boundary for unexpected crashes
-- [ ] **Accessibility**  `accessibilityLabel` on all interactive elements
-- [ ] **App Store / Play Store submission**  privacy policy URL, metadata, screenshots
+- [ ] **Real AdMob product IDs** — replace placeholders in `lib/adUnits.ts`
+- [ ] **Error boundary** — global React error boundary for unexpected crashes
+- [ ] **Accessibility** — `accessibilityLabel` on all interactive elements
+- [ ] **App Store / Play Store submission** — privacy policy URL, metadata, screenshots
+
+### Completed (Tasks 4–7)
+- [x] **Push notifications** — full MVP with deferred prompt, foreground suppression, weekly summary
+- [x] **Subscription paywall** — RevenueCat integration, free-snapshot gating, webhook
+- [x] **School attribution** — ambassador tracking with school picker + "Don't ask again"
+- [x] **Notification audit** — dedup prevention, sign-out cleanup, honest copy
 
 ---
 

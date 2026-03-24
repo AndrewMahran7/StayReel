@@ -43,7 +43,7 @@ subject = "Confirm your StayReel account"
 content_path = "./supabase/templates/confirmation.html"
 
 [auth.email.template.magic_link]
-subject = "Your StayReel sign-in link"
+subject = "Your secure StayReel sign-in link"
 content_path = "./supabase/templates/magic-link.html"
 
 [auth.external.google]
@@ -53,15 +53,33 @@ secret = "env(GOOGLE_CLIENT_SECRET)"
 
 # ── Edge Functions ─────────────────────────────────────────────
 
-[functions.connect-instagram]
-verify_jwt = true
+[functions.admin-reset-quota]
+verify_jwt = false
 
 [functions.capture-snapshot]
-verify_jwt = true
+verify_jwt = false
+
+[functions.connect-instagram]
+verify_jwt = false
 
 [functions.diffs-latest]
-verify_jwt = true
+verify_jwt = false
+
+[functions.list-users]
+verify_jwt = false
+
+[functions.snapshot-continue]
+verify_jwt = false
+
+[functions.snapshot-history]
+verify_jwt = false
+
+[functions.snapshot-start]
+verify_jwt = false
 
 [functions.status]
-verify_jwt = true
+verify_jwt = false
+
+[functions.unfollow-user]
+verify_jwt = false
 

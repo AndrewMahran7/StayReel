@@ -13,6 +13,8 @@ import { supabase, handleAuthDeepLink } from '@/lib/supabase';
 import { queryClient } from '@/lib/queryClient';
 import { useAuthStore } from '@/store/authStore';
 import { useAdStore } from '@/store/adStore';
+import { useSubscriptionStore } from '@/store/subscriptionStore';
+import { useNotifications } from '@/hooks/useNotifications';
 
 function AuthGuard() {
   const router     = useRouter();
@@ -45,16 +47,84 @@ function AuthGuard() {
 export default function RootLayout() {
   const { setSession, setInitialised, setIgAccountId } = useAuthStore();
   const { hydrate: hydrateAds } = useAdStore();
+  const hydrateSub = useSubscriptionStore((s) => s.hydrate);
+  const resetSub   = useSubscriptionStore((s) => s.reset);
+
+  // Register push notifications + handle notification taps
+  useNotifications();
 
   // Bootstrap: load saved session + ad prefs
   useEffect(() => {
     hydrateAds();
 
+    // Safety timeout: ensure setInitialised() fires even if network hangs.
+    // This prevents an infinite loading screen from a hung getSession() or
+    // ig_accounts query. 15 s is generous but still catches real hangs.
+    let bootstrapDone = false;
+    const safetyTimer = setTimeout(() => {
+      if (!bootstrapDone) {
+        console.warn('[Auth] Bootstrap safety timeout — forcing initialised');
+        setInitialised();
+      }
+    }, 15_000);
+
     // Wrap the whole bootstrap in try/finally so setInitialised() is
     // always called even if the ig_accounts query or getSession() throws.
     const bootstrap = async () => {
       try {
-        const { data: { session } } = await supabase.auth.getSession();
+        // ── Step 1: Handle incoming deep link (magic-link callback) ──
+        // Process BEFORE reading the stored session so a fresh PKCE code
+        // exchange is reflected in the getSession() call that follows.
+        // Race with a 10 s timeout so a slow network can't hang bootstrap.
+        const initialUrl = await Linking.getInitialURL();
+        console.log('[Auth] Bootstrap — initial URL:', initialUrl ?? 'none');
+
+        if (initialUrl) {
+          await Promise.race([
+            handleAuthDeepLink(initialUrl),
+            new Promise<void>((r) => setTimeout(r, 10_000)),
+          ]);
+        }
+
+        // ── Step 2: Load current session ─────────────────────────────
+        const { data: { session: storedSession } } = await supabase.auth.getSession();
+        console.log(
+          '[Auth] Bootstrap — stored session:',
+          storedSession ? `user=${storedSession.user.id}` : 'none',
+        );
+
+        // Only refresh when the token is actually expired or within 60 s of
+        // expiry. Refreshing unconditionally burns refresh tokens on every app
+        // open and creates a race condition during hot-reload (two bootstrap
+        // calls both read the same refresh token; the second one fails and
+        // triggers a spurious sign-out).
+        let session = storedSession;
+        if (storedSession) {
+          const expiresAt = storedSession.expires_at ?? 0; // unix seconds
+          const isExpiring = (expiresAt * 1_000 - Date.now()) < 60_000;
+          if (isExpiring) {
+            console.log('[Auth] Session expiring soon, refreshing…');
+            const { data: refreshed, error: refreshError } = await supabase.auth.refreshSession();
+            if (refreshError) {
+              // Stale / consumed refresh token — clear locally without a server
+              // round-trip to avoid extra noise from the revocation endpoint.
+              const isStale =
+                /refresh token/i.test(refreshError.message) ||
+                /not found/i.test(refreshError.message);
+              if (isStale) {
+                console.log('[Auth] Refresh token expired, clearing local session');
+              } else {
+                console.warn('[Auth] Refresh failed:', refreshError.message);
+              }
+              await supabase.auth.signOut({ scope: 'local' });
+              session = null;
+            } else {
+              session = refreshed.session;
+              console.log('[Auth] Session refreshed successfully');
+            }
+          }
+        }
+
         setSession(session);
 
         if (session?.user) {
@@ -67,27 +137,74 @@ export default function RootLayout() {
             .limit(1)
             .maybeSingle();
           if (data?.id) setIgAccountId(data.id);
+
+          // Hydrate subscription state (RevenueCat + Supabase profile)
+          hydrateSub(session.user.id).catch((err: Error) =>
+            console.warn('[Auth] Subscription hydrate error:', err.message),
+          );
         }
       } finally {
+        bootstrapDone = true;
+        clearTimeout(safetyTimer);
+        console.log('[Auth] Bootstrap complete, initialised = true');
         setInitialised();
       }
     };
     bootstrap();
 
-    // Auth state changes (sign-in / sign-out)
+    // Auth state changes (sign-in / sign-out / token refresh)
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       // @ts-ignore — supabase-js ships only .d.mts/.d.cts; tsc resolves fine via
       // bundler exports-field but some tsserver builds can't follow it.
-      async (_event, session) => {
+      async (event, session) => {
+        console.log('[Auth] onAuthStateChange:', event, session ? 'session' : 'no-session');
         setSession(session);
-        if (!session) setIgAccountId(null);
+        if (!session) {
+          setIgAccountId(null);
+          resetSub();
+        } else if (
+          event === 'SIGNED_IN' ||
+          event === 'TOKEN_REFRESHED' ||
+          event === 'INITIAL_SESSION'
+        ) {
+          // For INITIAL_SESSION, skip the ig_accounts re-query if bootstrap
+          // already populated igAccountId — avoids a race where this handler
+          // momentarily nulls out igAccountId, causing AuthGuard to flash the
+          // connect-instagram screen.
+          const currentIgId = useAuthStore.getState().igAccountId;
+          if (event === 'INITIAL_SESSION' && currentIgId) {
+            console.log('[Auth] INITIAL_SESSION: igAccountId already set, skipping re-query');
+          } else {
+            // Re-fetch igAccountId so AuthGuard doesn't redirect a freshly
+            // signed-in user to /connect-instagram when they already have an
+            // account linked.
+            const { data } = await supabase
+              .from('ig_accounts')
+              .select('id')
+              .eq('user_id', session.user.id)
+              .is('deleted_at', null)
+              .eq('status', 'active')
+              .limit(1)
+              .maybeSingle();
+            setIgAccountId(data?.id ?? null);
+          }
+
+          // Ensure subscription state is loaded (covers warm magic-link sign-in)
+          hydrateSub(session.user.id).catch((err: Error) =>
+            console.warn('[Auth] Subscription hydrate error (state change):', err.message),
+          );
+        }
       },
     );
 
-    // Deep-link handler (magic link callback)
-    const handleUrl = ({ url }: { url: string }) => handleAuthDeepLink(url);
+    // Deep-link handler for warm starts (app already running)
+    const handleUrl = ({ url }: { url: string }) => {
+      console.log('[Auth] Deep link received (warm):', url);
+      handleAuthDeepLink(url);
+    };
     const sub = Linking.addEventListener('url', handleUrl);
-    Linking.getInitialURL().then((url: string | null) => handleAuthDeepLink(url));
+    // NOTE: getInitialURL is handled inside bootstrap above — do NOT
+    // call it again here to avoid a duplicate PKCE code exchange race.
 
     return () => {
       subscription.unsubscribe();

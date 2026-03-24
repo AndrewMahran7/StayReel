@@ -1,86 +1,102 @@
+/// <reference path="../deno-types.d.ts" />
 // _shared/errors.ts
-// Typed error classes and standardised error response helper.
+// Typed error helpers for Edge Functions.
+//
+// Usage:
+//   throw Errors.unauthorized();
+//   throw Errors.snapshotLimit(nextAllowedAt, "One snapshot per hour.");
+//   throw new AppError("MY_CODE", "Something went wrong", 400, { extra: "data" });
+//
+// In the top-level catch block:
+//   return errorResponse(err);
 
 import { jsonResponse } from "./cors.ts";
 
+// ── AppError ───────────────────────────────────────────────────────────────
+
+/**
+ * All intentional edge-function errors should be thrown as AppError.
+ * `errorResponse()` converts them to well-shaped JSON HTTP responses.
+ */
 export class AppError extends Error {
   constructor(
-    public readonly code: string,
-    message: string,
-    public readonly httpStatus: number = 400,
-    public readonly detail?: unknown,
+    public readonly code:       string,
+    message:                    string,
+    public readonly httpStatus: number = 500,
+    public readonly detail?:    Record<string, unknown>,
   ) {
     super(message);
     this.name = "AppError";
   }
 }
 
-// ── Predefined errors ─────────────────────────────────────────
+// ── Factory helpers ────────────────────────────────────────────────────────
 
 export const Errors = {
-  unauthorized: () =>
-    new AppError("UNAUTHORIZED", "Missing or invalid auth token", 401),
+  // ── Auth ──────────────────────────────────────────────────────────────
+  unauthorized(message = "Unauthorized.") {
+    return new AppError("UNAUTHORIZED", message, 401);
+  },
 
-  forbidden: () =>
-    new AppError("FORBIDDEN", "You do not own this resource", 403),
+  forbidden(message = "Forbidden.") {
+    return new AppError("FORBIDDEN", message, 403);
+  },
 
-  notFound: (resource: string) =>
-    new AppError("NOT_FOUND", `${resource} not found`, 404),
+  // ── Request validation ────────────────────────────────────────────────
+  badRequest(message = "Bad request.") {
+    return new AppError("BAD_REQUEST", message, 400);
+  },
 
-  rateLimited: (detail?: string) =>
-    new AppError(
-      "RATE_LIMITED",
-      detail ?? "Too many requests. Try again later.",
-      429,
-    ),
+  notFound(resource = "Resource") {
+    return new AppError("NOT_FOUND", `${resource} not found.`, 404);
+  },
 
-  igChallenge: () =>
-    new AppError(
-      "IG_CHALLENGE_REQUIRED",
-      "Instagram requires a security challenge. Please re-authenticate in the app.",
-      503,
-    ),
+  // ── Server ────────────────────────────────────────────────────────────
+  internal(message = "An internal error occurred.") {
+    return new AppError("INTERNAL_ERROR", message, 500);
+  },
 
-  igSessionInvalid: () =>
-    new AppError(
-      "IG_SESSION_INVALID",
-      "Instagram session is invalid or expired.",
-      401,
-    ),
+  // ── Rate limiting ─────────────────────────────────────────────────────
+  /**
+   * Thrown when the hourly or daily snapshot cap is hit.
+   * `nextAllowedAt` is an ISO timestamp; surfaced to the client via `detail`.
+   */
+  snapshotLimit(nextAllowedAt: string, message: string) {
+    return new AppError("SNAPSHOT_LIMIT", message, 429, { next_allowed_at: nextAllowedAt });
+  },
 
-  igRateLimit: () =>
-    new AppError(
-      "IG_RATE_LIMITED",
-      "Instagram rate-limited this request. Back-off applied.",
-      503,
-    ),
+  // ── Instagram session errors ──────────────────────────────────────────
+  igSessionInvalid(message = "Instagram session expired. Please reconnect your account.") {
+    return new AppError("IG_SESSION_INVALID", message, 401);
+  },
 
-  badRequest: (msg: string, detail?: unknown) =>
-    new AppError("BAD_REQUEST", msg, 400, detail),
+  igChallenge(message = "Instagram requires a security challenge. Please open Instagram and complete it, then try again.") {
+    return new AppError("IG_CHALLENGE_REQUIRED", message, 403);
+  },
 
-  snapshotLimit: (nextAllowedAt: string, message?: string) =>
-    new AppError(
-      "SNAPSHOT_LIMIT",
-      message ?? "Snapshot already taken recently. You can take one snapshot per hour.",
-      429,
-      { next_allowed_at: nextAllowedAt },
-    ),
-
-  internal: (msg = "Internal server error") =>
-    new AppError("INTERNAL_ERROR", msg, 500),
+  igRateLimit(message = "Instagram is rate-limiting this account. Please try again later.") {
+    return new AppError("IG_RATE_LIMITED", message, 429);
+  },
 } as const;
 
-// ── Response helper ────────────────────────────────────────────
+// ── errorResponse ──────────────────────────────────────────────────────────
 
+/**
+ * Converts any thrown value into a CORS-safe JSON HTTP response.
+ * Pass the raw caught value — no need to check instanceof first.
+ */
 export function errorResponse(err: unknown): Response {
   if (err instanceof AppError) {
-    return jsonResponse(
-      { error: err.code, message: err.message, detail: err.detail ?? null },
-      err.httpStatus,
-    );
+    const body: Record<string, unknown> = {
+      error:   err.code,
+      message: err.message,
+    };
+    if (err.detail) body.detail = err.detail;
+    return jsonResponse(body, err.httpStatus);
   }
 
-  console.error("[unhandled]", err);
+  // Unexpected error — log it and return a generic 500
+  console.error("[errorResponse] Unhandled error:", err);
   return jsonResponse(
     { error: "INTERNAL_ERROR", message: "An unexpected error occurred." },
     500,

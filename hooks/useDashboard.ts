@@ -38,6 +38,8 @@ export interface DiffSummary {
 
   // Rate limit
   next_snapshot_allowed_at:   string | null;
+  cooldown_reason:            'hourly' | 'daily_cap' | null;
+  snapshots_today:            number;
 
   // Flags
   is_complete:                boolean;
@@ -45,7 +47,15 @@ export interface DiffSummary {
 }
 
 async function fetchDashboard(igAccountId: string): Promise<DiffSummary | null> {
-  const { data: { session } } = await supabase.auth.getSession();
+  // getSession() reads from cache and can return an expired token when the
+  // OS killed the background refresh timer. Refresh proactively if needed.
+  let { data: { session } } = await supabase.auth.getSession();
+  const expiresAt = session?.expires_at ?? 0;
+  if (!session?.access_token || (expiresAt * 1_000 - Date.now()) < 60_000) {
+    const { data } = await supabase.auth.refreshSession();
+    session = data.session;
+  }
+
   const res = await fetch(
     `${process.env.EXPO_PUBLIC_SUPABASE_URL}/functions/v1/diffs-latest?ig_account_id=${igAccountId}`,
     {

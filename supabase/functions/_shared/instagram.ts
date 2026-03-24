@@ -519,6 +519,8 @@ export interface ChunkedFetchOptions {
   timeBudgetMs?: number;
   /** Safety cap: stop after this many pages regardless of time. */
   maxPages?: number;
+  /** Reuse a rank_token across invocations for stable big_list pagination. */
+  rankToken?: string;
 }
 
 export interface ChunkedFetchResult {
@@ -528,6 +530,8 @@ export interface ChunkedFetchResult {
   isComplete: boolean;
   pagesFetched: number;
   stopReason: FailureCode | null;
+  /** The rank_token used — persist this alongside the cursor for the next invocation. */
+  rankToken: string;
 }
 
 /**
@@ -550,10 +554,11 @@ export async function fetchEdgeListChunked(
     startCursor = null,
     timeBudgetMs = 70_000,
     maxPages = 50,
+    rankToken: providedRankToken,
   } = options;
 
   const deadline   = Date.now() + timeBudgetMs;
-  const rankToken  = newRankToken(igUserId);
+  const rankToken  = providedRankToken ?? newRankToken(igUserId);
   const edges: IgEdge[] = [];
   let nextMaxId    = startCursor;
   let page         = 0;
@@ -571,10 +576,10 @@ export async function fetchEdgeListChunked(
     // Time-budget check before each page fetch
     if (Date.now() >= deadline) {
       console.log(`[ig-chunked] ${direction}: time budget hit at page ${page} (${edges.length} edges)`);
-      return { edges, nextCursor: nextMaxId, isComplete: false, pagesFetched: page, stopReason: null };
+      return { edges, nextCursor: nextMaxId, isComplete: false, pagesFetched: page, stopReason: null, rankToken };
     }
 
-    const qs = new URLSearchParams({ count: String(PAGE_SIZE) });
+    const qs = new URLSearchParams({ count: String(randomPageSize()) });
     qs.set("rank_token", rankToken);
     if (nextMaxId) qs.set("max_id", nextMaxId);
 
@@ -583,12 +588,12 @@ export async function fetchEdgeListChunked(
 
     if (!result.ok) {
       console.warn(`[ig-chunked] ${direction} page ${page + 1} failed: ${result.failureCode}`);
-      return { edges, nextCursor: nextMaxId, isComplete: false, pagesFetched: page, stopReason: result.failureCode };
+      return { edges, nextCursor: nextMaxId, isComplete: false, pagesFetched: page, stopReason: result.failureCode, rankToken };
     }
 
     const users = (result.body.users ?? result.body.items ?? []) as Array<Record<string, unknown>>;
     if (!Array.isArray(users)) {
-      return { edges, nextCursor: nextMaxId, isComplete: false, pagesFetched: page, stopReason: "SUSPICIOUS_RESPONSE" };
+      return { edges, nextCursor: nextMaxId, isComplete: false, pagesFetched: page, stopReason: "SUSPICIOUS_RESPONSE", rankToken };
     }
 
     for (const u of users) {
@@ -632,14 +637,14 @@ export async function fetchEdgeListChunked(
         }
         console.warn(`[ig-chunked] ${direction} page ${page}: big_list, no cursor after retry — stopping at ${edges.length}`);
       }
-      return { edges, nextCursor: null, isComplete: !bigList, pagesFetched: page, stopReason: bigList ? "PAGE_LIMIT_REACHED" : null };
+      return { edges, nextCursor: null, isComplete: !bigList, pagesFetched: page, stopReason: bigList ? "PAGE_LIMIT_REACHED" : null, rankToken };
     }
 
     await sleep(randomBetween(PAGE_DELAY_MIN, PAGE_DELAY_MAX));
   }
 
   console.warn(`[ig-chunked] ${direction}: maxPages (${maxPages}) hit, stopped at ${edges.length}`);
-  return { edges, nextCursor: nextMaxId, isComplete: false, pagesFetched: page, stopReason: "PAGE_LIMIT_REACHED" };
+  return { edges, nextCursor: nextMaxId, isComplete: false, pagesFetched: page, stopReason: "PAGE_LIMIT_REACHED", rankToken };
 }
 
 // ─────────────────────────────────────────────────────────────

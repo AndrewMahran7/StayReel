@@ -55,14 +55,16 @@ Deno.serve(async (req: Request) => {
     // ── 5. Already terminal? ──────────────────────────────────
     if (job.status === "complete" || job.status === "failed") {
       return jsonResponse({
-        jobId:         job.id,
-        status:        job.status,
-        phase:         job.phase,
-        pagesDone:     job.pages_done,
-        followersSeen: (job.followers_json as unknown[]).length,
-        followingSeen: (job.following_json as unknown[]).length,
-        done:          true,
-        error:         job.error ?? undefined,
+        jobId:            job.id,
+        status:           job.status,
+        phase:            job.phase,
+        pagesDone:        job.pages_done,
+        followersSeen:    (job.followers_json as unknown[]).length,
+        followingSeen:    (job.following_json as unknown[]).length,
+        followerCountApi: job.follower_count_api,
+        followingCountApi:job.following_count_api,
+        done:             true,
+        error:            job.error ?? undefined,
       });
     }
 

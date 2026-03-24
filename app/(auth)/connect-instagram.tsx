@@ -13,8 +13,10 @@ import { WebView } from 'react-native-webview';
 import CookieManager from '@react-native-cookies/cookies';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
+import { useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/store/authStore';
+import { useSubscriptionStore } from '@/store/subscriptionStore';
 import C from '@/lib/colors';
 
 function isLoginPage(url: string) {
@@ -31,7 +33,9 @@ const IG_LOGIN_URL = 'https://www.instagram.com/accounts/login/?next=%2F';
 
 export default function ConnectInstagramScreen() {
   const { setIgAccountId, session } = useAuthStore();
+  const hydrateSub = useSubscriptionStore((s) => s.hydrate);
   const router = useRouter();
+  const qc = useQueryClient();
   const [submitting, setSubmitting]   = useState(false);
   const [webviewKey, setWebviewKey]   = useState(0);
   const [loggedIn, setLoggedIn]       = useState(false); // feed is visible
@@ -108,6 +112,16 @@ export default function ConnectInstagramScreen() {
       if (!res.ok) throw new Error(json?.message ?? `HTTP ${res.status}`);
 
       setIgAccountId(json.ig_account_id);
+
+      // Ensure subscription state is hydrated before navigating —
+      // prevents a flash of "free" state on the dashboard.
+      if (session?.user?.id) {
+        hydrateSub(session.user.id).catch(() => {});
+      }
+
+      // Invalidate any cached queries so dashboard fetches fresh data
+      qc.invalidateQueries();
+
       router.replace('/(tabs)/dashboard');
     } catch (err: any) {
       hasSubmitted.current = false;

@@ -58,7 +58,46 @@ Deno.serve(async (req: Request) => {
 
     const db = adminClient();
 
-    // ── 4. Check for existing running job ─────────────────────
+    // ── 3b. Subscription / free-snapshot guard (defense-in-depth) ─
+    {
+      const { data: prof } = await db
+        .from("profiles")
+        .select("subscription_status, subscription_expires_at, free_snapshots_used, free_snapshot_limit")
+        .eq("id", userId)
+        .single();
+
+      if (prof) {
+        const subActive = ["active", "trial"].includes(prof.subscription_status ?? "")
+          && (!prof.subscription_expires_at || new Date(prof.subscription_expires_at) > new Date());
+
+        if (!subActive) {
+          const used  = prof.free_snapshots_used  ?? 0;
+          const limit = prof.free_snapshot_limit   ?? 1;
+          if (used >= limit) {
+            throw Errors.forbidden("Subscription required. Please upgrade to StayReel Pro.");
+          }
+          // Increment free snapshot usage
+          await db
+            .from("profiles")
+            .update({ free_snapshots_used: used + 1 })
+            .eq("id", userId);
+        }
+      }
+    }
+
+    // ── 4a. Clean up stale running jobs ───────────────────────
+    // If a job has been "running" without an update for 10+ minutes,
+    // the Edge Function that was processing it has long since timed out.
+    // Mark it failed so a new job can be created.
+    const staleThreshold = new Date(Date.now() - 10 * 60_000).toISOString();
+    await db
+      .from("snapshot_jobs")
+      .update({ status: "failed", error: "Job timed out (stale)", updated_at: new Date().toISOString() })
+      .eq("ig_account_id", igAccountId)
+      .eq("status", "running")
+      .lt("updated_at", staleThreshold);
+
+    // ── 4b. Check for existing running job ────────────────────
     const { data: existingJob } = await db
       .from("snapshot_jobs")
       .select("*")
@@ -69,14 +108,16 @@ Deno.serve(async (req: Request) => {
     if (existingJob) {
       const j = existingJob as unknown as SnapshotJobRow;
       return jsonResponse({
-        jobId:         j.id,
-        status:        j.status,
-        phase:         j.phase,
-        pagesDone:     j.pages_done,
-        followersSeen: (j.followers_json as unknown[]).length,
-        followingSeen: (j.following_json as unknown[]).length,
-        done:          false,
-        message:       "Resuming existing job…",
+        jobId:            j.id,
+        status:           j.status,
+        phase:            j.phase,
+        pagesDone:        j.pages_done,
+        followersSeen:    (j.followers_json as unknown[]).length,
+        followingSeen:    (j.following_json as unknown[]).length,
+        followerCountApi: j.follower_count_api,
+        followingCountApi:j.following_count_api,
+        done:             false,
+        message:          "Resuming existing job…",
       });
     }
 

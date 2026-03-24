@@ -17,6 +17,19 @@ export function createUserClient(authHeader: string): SupabaseClient {
   });
 }
 
+// ── Anon client (for auth.getUser verification only) ─────────
+// auth.getUser(token) works with any valid apikey — using the anon key
+// avoids any issues with the SUPABASE_SERVICE_ROLE_KEY secret.
+let _anonClient: SupabaseClient | null = null;
+export function anonClient(): SupabaseClient {
+  if (!_anonClient) {
+    _anonClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+      auth: { persistSession: false },
+    });
+  }
+  return _anonClient;
+}
+
 // ── Service-role client (bypasses RLS) ───────────────────────
 // Used only for privileged writes (snapshots, diffs, audit, vault).
 let _adminClient: SupabaseClient | null = null;

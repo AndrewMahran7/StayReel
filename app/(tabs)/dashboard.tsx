@@ -13,7 +13,7 @@ import {
   Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useRouter } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 
 import { useDashboard }                                          from '@/hooks/useDashboard';
@@ -25,7 +25,11 @@ import { WeeklySummaryCard }                   from '@/components/WeeklySummaryC
 import { StreakBadge }                         from '@/components/StreakBadge';
 import { GrowthChart }                         from '@/components/GrowthChart';
 import { SnapshotErrorCard }                   from '@/components/SnapshotErrorCard';
+import { PaywallModal }                        from '@/components/PaywallModal';
+import { SchoolPickerModal }                   from '@/components/SchoolPickerModal';
 import { useAuthStore }                        from '@/store/authStore';
+import { useSubscriptionStore }                from '@/store/subscriptionStore';
+import { useSchoolPrompt }                     from '@/hooks/useSchoolPrompt';
 import C                                       from '@/lib/colors';
 import type { ListType }                       from '@/hooks/useListData';
 import { TapTheDotGameModal }                  from '@/components/TapTheDotGameModal';
@@ -74,10 +78,21 @@ const CARDS: {
 // â”€â”€ Screen â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 export default function DashboardScreen() {
   const router                                 = useRouter();
-  const { data, isLoading, refetch, isRefetching, error } = useDashboard();
+  const { data, isLoading, refetch, error } = useDashboard();
   const capture                                = useSnapshotCapture();
   const [capturing, setCapturing]              = useState(false);
+  const [manualRefreshing, setManualRefreshing] = useState(false);
   const setPendingListType                     = useAuthStore((s) => s.setPendingListType);
+  const user                                   = useAuthStore((s) => s.user);
+
+  // Subscription / paywall
+  const canTakeSnapshot     = useSubscriptionStore((s) => s.canTakeSnapshot);
+  const isPro               = useSubscriptionStore((s) => s.isPro);
+  const incrementFreeUsage  = useSubscriptionStore((s) => s.incrementFreeUsage);
+  const [paywallOpen, setPaywallOpen] = useState(false);
+
+  // School attribution prompt (shown once for new users)
+  const schoolPrompt = useSchoolPrompt();
 
   // "Tap the Dot" game modal
   const [gameOpen,       setGameOpen]       = useState(false);
@@ -98,6 +113,16 @@ export default function DashboardScreen() {
     if (data?.next_snapshot_allowed_at === null) setOverrideNextAt(null);
   }, [data?.next_snapshot_allowed_at]);
 
+  // The tab navigator keeps this screen alive across sign-out → sign-in,
+  // so capture.error can persist from a previous session. Clear it whenever
+  // the screen comes back into focus so a returning user never sees a stale
+  // error card from a session that has since been replaced.
+  useFocusEffect(
+    useCallback(() => {
+      capture.clearError();
+    }, []),
+  );
+
   // Detect snapshot finish → update modal feedback flags
   useEffect(() => {
     const isNowCapturing = capturing || capture.isPending;
@@ -112,10 +137,23 @@ export default function DashboardScreen() {
     wasCapturingRef.current = isNowCapturing;
   }, [capturing, capture.isPending, capture.error]);
 
-  const handleRefresh  = useCallback(() => { refetch(); }, [refetch]);
+  const handleRefresh = useCallback(async () => {
+    setManualRefreshing(true);
+    try {
+      await refetch();
+    } finally {
+      setManualRefreshing(false);
+    }
+  }, [refetch]);
 
   const handleCapture = async () => {
     if (isLimited) return;
+
+    // Paywall gate: check subscription before allowing snapshot
+    if (!canTakeSnapshot()) {
+      setPaywallOpen(true);
+      return;
+    }
 
     await new Promise<void>((resolve) =>
       Alert.alert(
@@ -132,6 +170,13 @@ export default function DashboardScreen() {
     try {
       await capture.mutateAsync();
       setOverrideNextAt(null);
+
+      // Track free snapshot usage (no-op for pro users)
+      if (!isPro) {
+        incrementFreeUsage().catch(() => {});
+        // Show paywall after a short delay so the user can see their results first
+        setTimeout(() => setPaywallOpen(true), 3000);
+      }
     } catch (err: any) {
       if (err instanceof SnapshotLimitError) {
         setOverrideNextAt(err.nextAllowedAt);
@@ -163,7 +208,7 @@ export default function DashboardScreen() {
         contentContainerStyle={styles.scroll}
         refreshControl={
           <RefreshControl
-            refreshing={isRefetching}
+            refreshing={manualRefreshing}
             onRefresh={handleRefresh}
             tintColor={C.accent}
           />
@@ -198,7 +243,9 @@ export default function DashboardScreen() {
                 <ActivityIndicator size="small" color="#fff" />
                 <Text style={styles.captureBtnText}>
                   {capture.progress.phase === 'followers'
-                    ? `Followers ${capture.progress.followersSeen}…`
+                    ? capture.progress.followerCountApi > 0
+                      ? `Followers ${Math.min(99, Math.round(capture.progress.followersSeen / capture.progress.followerCountApi * 100))}%`
+                      : `Followers ${capture.progress.followersSeen}…`
                     : capture.progress.phase === 'following'
                     ? `Following ${capture.progress.followingSeen}…`
                     : capture.progress.phase === 'finalize'
@@ -222,7 +269,11 @@ export default function DashboardScreen() {
 
         {/* Safety info text */}
         <Text style={styles.infoText}>
-          Up to 3 snapshots per day, 1 per hour — keeps your account safe.
+          {isLimited && data?.cooldown_reason === 'daily_cap'
+            ? `Daily limit reached (${data?.snapshots_today ?? 3} of 3 today). Resets in ${countdown}.`
+            : isLimited
+            ? `Next snapshot available in ${countdown}.`
+            : 'Up to 3 snapshots per day, 1 per hour — keeps your account safe.'}
         </Text>
 
         {/* ── Snapshot progress card ────────────────────────────────── */}
@@ -242,7 +293,9 @@ export default function DashboardScreen() {
               <View style={{ flex: 1 }}>
                 <Text style={styles.progressTitle}>
                   {capture.progress.phase === 'followers'
-                    ? `Fetching followers — ${capture.progress.followersSeen} so far`
+                    ? capture.progress.followerCountApi > 0
+                      ? `Fetching followers — ${capture.progress.followersSeen} of ~${capture.progress.followerCountApi}`
+                      : `Fetching followers — ${capture.progress.followersSeen} so far`
                     : capture.progress.phase === 'following'
                     ? `Fetching following — ${capture.progress.followingSeen} so far`
                     : capture.progress.phase === 'finalize'
@@ -323,8 +376,8 @@ export default function DashboardScreen() {
           />
         )}
 
-        {/* â”€â”€ Net follower change â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
-        {data?.net_follower_change != null && (
+        {/* ── Net follower change ────────────────────────────── */}
+        {data?.net_follower_change != null && data.has_diff && (
           <View style={[
             styles.netCard,
             data.net_follower_change >= 0 ? styles.netPositive : styles.netNegative,
@@ -334,6 +387,11 @@ export default function DashboardScreen() {
               {data.net_follower_change >= 0 ? '+' : ''}
               {data.net_follower_change.toLocaleString()}
             </Text>
+            {(data.new_followers_count > 0 || data.lost_followers_count > 0) && (
+              <Text style={styles.netExplain}>
+                +{data.new_followers_count} new · −{data.lost_followers_count} lost
+              </Text>
+            )}
           </View>
         )}
 
@@ -397,6 +455,16 @@ export default function DashboardScreen() {
           </View>
         )}
       </ScrollView>
+
+      {/* Paywall modal – shown when free user tries to take another snapshot */}
+      <PaywallModal visible={paywallOpen} onClose={() => setPaywallOpen(false)} />
+
+      {/* School attribution modal – shown once for new users */}
+      <SchoolPickerModal
+        visible={schoolPrompt.shouldShow}
+        userId={user?.id ?? ''}
+        onDone={schoolPrompt.dismiss}
+      />
     </SafeAreaView>
   );
 }
@@ -556,6 +624,7 @@ const styles = StyleSheet.create({
   netNegative: { backgroundColor: C.redDim   },
   netLabel:    { color: C.textSecondary, fontSize: 14 },
   netValue:    { color: C.textPrimary, fontSize: 26, fontWeight: '800' },
+  netExplain:  { color: C.textMuted, fontSize: 12, marginTop: 2 },
 
   hintBox: {
     flexDirection:   'row',

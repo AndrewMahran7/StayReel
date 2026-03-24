@@ -16,7 +16,7 @@
           <tr>
             <td align="center" style="padding-bottom:28px;">
               <div style="display:inline-block;background-color:#1a1a1a;border-radius:16px;padding:12px 20px;border:1px solid #2a2a2a;">
-                <span style="font-size:20px;font-weight:800;color:#ffffff;letter-spacing:-0.5px;">👁 StayReel</span>
+                <span style="font-size:20px;font-weight:800;color:#ffffff;letter-spacing:-0.5px;">&#128065; StayReel</span>
               </div>
             </td>
           </tr>
@@ -26,17 +26,17 @@
             <td style="background-color:#141414;border-radius:20px;border:1px solid #2a2a2a;padding:32px;">
 
               <p style="margin:0 0 6px;font-size:24px;font-weight:800;color:#ffffff;letter-spacing:-0.5px;">Your sign-in link</p>
-              <p style="margin:0 0 28px;font-size:14px;color:#888888;line-height:21px;">
-                Tap the button below to sign in to StayReel. This link expires in 24 hours.
+              <p style="margin:0 0 24px;font-size:14px;color:#888888;line-height:21px;">
+                You requested a secure sign-in link for <strong style="color:#cccccc;">StayReel</strong>, the private Instagram follower-tracking app. Tap the button below to sign in. This link expires in 24&nbsp;hours.
               </p>
 
               <!-- CTA -->
-              <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom:32px;">
+              <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom:28px;">
                 <tr>
                   <td align="center">
                     <a href="{{ .ConfirmationURL }}"
                        style="display:inline-block;background-color:#9B4DCA;color:#ffffff;text-decoration:none;font-size:15px;font-weight:700;padding:15px 38px;border-radius:50px;">
-                      Sign in to StayReel →
+                      Sign in to StayReel &#8594;
                     </a>
                   </td>
                 </tr>
@@ -44,32 +44,57 @@
 
               <hr style="border:none;border-top:1px solid #2a2a2a;margin:0 0 24px;" />
 
-              <!-- Quick reconnect reminder -->
-              <p style="margin:0 0 12px;font-size:14px;font-weight:700;color:#ffffff;">Need to reconnect Instagram?</p>
-              <p style="margin:0 0 16px;font-size:13px;color:#888888;line-height:20px;">
-                If StayReel shows a session error, go to <strong style="color:#cccccc;">Settings → Reconnect Instagram</strong> and log all the way in to your home feed inside the app.
+              <!-- What is StayReel -->
+              <p style="margin:0 0 10px;font-size:15px;font-weight:700;color:#ffffff;">What is StayReel?</p>
+              <p style="margin:0 0 20px;font-size:13px;color:#aaaaaa;line-height:21px;">
+                StayReel lets you take periodic snapshots of your Instagram followers and following lists so you can see who followed or unfollowed you over time. It is a <strong style="color:#cccccc;">read-only</strong> tool &mdash; it only views your public follower and following lists.
               </p>
 
-              <!-- Compact alert reminders -->
+              <!-- Safety pledge -->
               <table width="100%" cellpadding="0" cellspacing="0" border="0"
-                     style="background-color:#1a1008;border:1px solid #3a2a00;border-radius:10px;margin-bottom:8px;">
+                     style="background-color:#0f1a0f;border:1px solid #1a3a1a;border-radius:12px;margin-bottom:20px;">
                 <tr>
-                  <td style="padding:11px 14px;">
-                    <span style="font-size:13px;color:#f5a623;font-weight:600;">⚠️ Seeing an Instagram security alert?</span>
-                    <span style="font-size:13px;color:#888888;"> Approve it in the Instagram app, then reconnect inside StayReel.</span>
+                  <td style="padding:14px 16px;">
+                    <p style="margin:0 0 6px;font-size:14px;font-weight:700;color:#2ecc71;">&#9989; What StayReel will never do</p>
+                    <p style="margin:0;font-size:13px;color:#aaaaaa;line-height:21px;">
+                      StayReel will <strong style="color:#cccccc;">never</strong> post, like, comment, follow, unfollow, or send messages on your behalf. It will never store your Instagram password. Your data is encrypted and never sold or shared.
+                    </p>
+                  </td>
+                </tr>
+              </table>
+
+              <!-- Instagram notices -->
+              <table width="100%" cellpadding="0" cellspacing="0" border="0"
+                     style="background-color:#1a1008;border:1px solid #3a2a00;border-radius:12px;margin-bottom:10px;">
+                <tr>
+                  <td style="padding:14px 16px;">
+                    <p style="margin:0 0 4px;font-size:13px;font-weight:600;color:#f5a623;">&#9888;&#65039; Seeing an Instagram security alert?</p>
+                    <p style="margin:0;font-size:13px;color:#aaaaaa;line-height:20px;">
+                      Instagram may occasionally show a security notice when any third-party tool reads your follower data. This is normal. Approve the alert in the Instagram app, then reconnect inside StayReel.
+                    </p>
                   </td>
                 </tr>
               </table>
 
               <table width="100%" cellpadding="0" cellspacing="0" border="0"
-                     style="background-color:#1a0808;border:1px solid #3a0000;border-radius:10px;">
+                     style="background-color:#1a0808;border:1px solid #3a0000;border-radius:12px;margin-bottom:20px;">
                 <tr>
-                  <td style="padding:11px 14px;">
-                    <span style="font-size:13px;color:#e74c3c;font-weight:600;">🤖 "Automated behavior" warning?</span>
-                    <span style="font-size:13px;color:#888888;"> Wait at least 1 hour, then try again. Do not retry repeatedly.</span>
+                  <td style="padding:14px 16px;">
+                    <p style="margin:0 0 4px;font-size:13px;font-weight:600;color:#e74c3c;">&#129302; &ldquo;Automated behavior&rdquo; warning?</p>
+                    <p style="margin:0;font-size:13px;color:#aaaaaa;line-height:20px;">
+                      Wait at least 1&nbsp;hour before trying again. Do not retry repeatedly &mdash; the warning clears on its own.
+                    </p>
                   </td>
                 </tr>
               </table>
+
+              <hr style="border:none;border-top:1px solid #2a2a2a;margin:0 0 20px;" />
+
+              <!-- Reconnect reminder -->
+              <p style="margin:0 0 10px;font-size:14px;font-weight:700;color:#ffffff;">Need to reconnect Instagram?</p>
+              <p style="margin:0 0 0;font-size:13px;color:#888888;line-height:20px;">
+                If StayReel shows a session error, go to <strong style="color:#cccccc;">Settings &#8594; Reconnect Instagram</strong> and log all the way in to your home feed inside the app.
+              </p>
 
             </td>
           </tr>
@@ -77,8 +102,16 @@
           <!-- Footer -->
           <tr>
             <td align="center" style="padding-top:24px;">
+              <p style="margin:0 0 6px;font-size:11px;color:#666666;">
+                Didn't request this? You can safely ignore this email &mdash; your account is unchanged.
+              </p>
+              <p style="margin:0 0 10px;font-size:11px;color:#555555;">
+                <a href="https://stayreel.app/terms" style="color:#9B4DCA;text-decoration:underline;">Terms of Service</a>
+                &nbsp;&middot;&nbsp;
+                <a href="https://stayreel.app/privacy" style="color:#9B4DCA;text-decoration:underline;">Privacy Policy</a>
+              </p>
               <p style="margin:0 0 4px;font-size:11px;color:#555555;">
-                Didn't request this? You can safely ignore it — your account is unchanged.
+                Need help? Contact <a href="mailto:privacy@stayreel.app" style="color:#9B4DCA;text-decoration:underline;">privacy@stayreel.app</a>
               </p>
               <p style="margin:0;font-size:11px;color:#444444;">
                 StayReel is not affiliated with Meta or Instagram.

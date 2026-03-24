@@ -79,6 +79,7 @@ Deno.serve(async (req: Request) => {
 
     // ── next_snapshot_allowed_at ──────────────────────────────────────────
     let next_snapshot_allowed_at: string | null = null;
+    let cooldown_reason: "hourly" | "daily_cap" | null = null;
 
     // 1. Hourly cooldown
     if (acct?.last_snapshot_at) {
@@ -86,6 +87,7 @@ Deno.serve(async (req: Request) => {
       const nextMs = lastMs + SNAPSHOT_COOLDOWN_MS;
       if (nextMs > Date.now()) {
         next_snapshot_allowed_at = new Date(nextMs).toISOString();
+        cooldown_reason = "hourly";
       }
     }
 
@@ -99,6 +101,8 @@ Deno.serve(async (req: Request) => {
       .gte("updated_at", windowStart)
       .order("updated_at", { ascending: true });
 
+    const snapshots_today = recentJobs?.length ?? 0;
+
     if (recentJobs && recentJobs.length >= DAILY_SNAPSHOT_CAP) {
       const oldestAt      = (recentJobs[0] as { updated_at: string }).updated_at;
       const dailyUnlockMs = new Date(oldestAt).getTime() + 24 * 60 * 60 * 1_000;
@@ -107,6 +111,7 @@ Deno.serve(async (req: Request) => {
         dailyUnlockMs > new Date(next_snapshot_allowed_at).getTime()
       ) {
         next_snapshot_allowed_at = new Date(dailyUnlockMs).toISOString();
+        cooldown_reason = "daily_cap";
       }
     }
 
@@ -158,7 +163,10 @@ Deno.serve(async (req: Request) => {
       to_captured_at:             snap.captured_at,
 
       // Change metrics (complete diffs only)
-      net_follower_change:        diffUsable ? (d.net_follower_change  ?? 0) : 0,
+      // Derive net change from the diff arrays so it's always consistent
+      // with new/lost counts. The stored d.net_follower_change uses raw
+      // Instagram API count deltas which can disagree with list-based diffs.
+      net_follower_change:        diffUsable ? (nf - lf) : 0,
       net_following_change:       diffUsable ? (d.net_following_change ?? 0) : 0,
       new_followers_count:        nf,
       lost_followers_count:       lf,
@@ -186,6 +194,8 @@ Deno.serve(async (req: Request) => {
 
       // Rate limit
       next_snapshot_allowed_at,
+      cooldown_reason,
+      snapshots_today,
 
       // Flags
       is_complete:                snap.is_list_complete ?? false,

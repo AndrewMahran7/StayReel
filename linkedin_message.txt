@@ -1,52 +1,102 @@
 Today my first iOS app was officially accepted into the App Store.
 
+
+
 It brought me back to 2020.
+
+
 
 During COVID, I built a stupid Unity game called Ball Drop. I pulled multiple all-nighters trying to figure out how to push it to the Google Play Store. When it finally went live, I was unbelievably proud.
 
+
+
 By the end of its life, it had four users:
+
 • Me
+
 • A family member
+
 • Two random downloads from Pakistan
+
+
 
 It was buggy. I eventually stopped maintaining it.
 
+
+
 But it was the first project I ever took from idea → code → publishing.
 
+
+
 My dad has always told me:
+
 “Stop starting things. Finish something.”
+
+
 
 Ball Drop was the first time I did.
 
+
+
 After that, I worked on bigger, more ambitious projects. My last one, Explicitly, pushed the boundaries of what I could technically build. I spent days building data pipelines, scraping and loading datasets, training models, validating outputs. It was complex. It was ambitious.
+
+
 
 But it never reached the final vision.
 
+
+
 I recently saw a video describing two types of founders:
+
+
 
 The founder who pushes the limits of technology and then tries to sell it.
 
+
+
 The founder who finds a proven need and builds a clean solution for it, even if it’s not technologically impressive.
+
+
 
 For a long time, I was the first type.
 
+
+
 StayReel is me trying the second.
+
+
 
 I saw apps like Reports+ charging premium subscriptions for follower analytics with hundreds of thousands of reviews. There was already demand. The problem wasn’t technological complexity. It was execution.
 
+
+
 So I built StayReel in three days with a clear vision and AI-assisted development.
 
+
+
 It’s not groundbreaking technology.
+
 It’s not a research paper.
+
 It’s not pushing the limits of machine learning.
+
+
 
 It’s finished.
 
+
+
 That feels different.
 
-I’m launching it free during beta to gather feedback before introducing a subscription model.
+
+
+I’m currently running a private beta before officially releasing it on the App Store. During beta, it’s completely free while I gather feedback and improve the experience.
+
 
 From a buggy Unity game with four users to shipping on the App Store.
 
+
+
 Still building.
+
 But now, finishing.

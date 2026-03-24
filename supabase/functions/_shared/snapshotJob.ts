@@ -18,6 +18,35 @@ import { adminClient }                              from "./supabase_client.ts";
 import { fetchEdgeListChunked, IgEdge, FAILURE_MODES } from "./instagram.ts";
 import { computeSnapshotDiff }                     from "./diff.ts";
 import { writeDiff, loadPreviousSnapshot }          from "./diff_writer.ts";
+import { sendPushNotification }                    from "./push.ts";
+
+// ── Cursor helpers ────────────────────────────────────────────────────
+// The rank_token must stay consistent across invocations for Instagram’s
+// big_list pagination to work correctly. We encode it alongside the cursor
+// in the DB column as "cursor|rankToken" so no schema change is needed.
+
+function parseCursorField(raw: string | null): { cursor: string | null; rankToken: string | null } {
+  if (!raw) return { cursor: null, rankToken: null };
+  const sep = raw.indexOf('|');
+  if (sep === -1) return { cursor: raw, rankToken: null };
+  return { cursor: raw.substring(0, sep) || null, rankToken: raw.substring(sep + 1) || null };
+}
+
+function encodeCursorField(cursor: string | null, rankToken: string): string | null {
+  if (!cursor) return null;
+  return `${cursor}|${rankToken}`;
+}
+
+/** Deduplicate edges by ig_id (preferred) or username fallback. */
+function deduplicateEdges(edges: IgEdge[]): IgEdge[] {
+  const seen = new Set<string>();
+  return edges.filter((e) => {
+    const key = e.ig_id ? e.ig_id : `@${e.username.toLowerCase()}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
 
 // ── Constants ──────────────────────────────────────────────────────────────
 /** Wall-clock budget per invocation (ms). Leaves ~75 s headroom before 150 s limit. */
@@ -56,6 +85,8 @@ export interface ChunkResult {
   pagesDone: number;
   followersSeen: number;
   followingSeen: number;
+  followerCountApi: number;
+  followingCountApi: number;
   done: boolean;
   message: string;
   followingCached: boolean;
@@ -89,23 +120,32 @@ export async function runSnapshotChunk(
   let followingCursor = job.following_cursor;
   let followingFromCache = false;
 
+  // Shorthand that auto-populates API counts from the job row
+  const mk = (
+    status: "running" | "complete" | "failed", p: string,
+    pd: number, fs: number, fws: number, done: boolean, msg: string, fwc = false,
+  ) => makeResult(job.id, status, p, pd, fs, fws, done, msg, fwc, job.follower_count_api, job.following_count_api);
+
   // ── Phase: followers ─────────────────────────────────────────────────────
   if (phase === "followers") {
+    const { cursor: actualFollowersCursor, rankToken: savedRankToken } = parseCursorField(followersCursor);
+
     const result = await fetchEdgeListChunked(igUserId, "followers", cookie, {
-      startCursor:  followersCursor,
+      startCursor:  actualFollowersCursor,
+      rankToken:    savedRankToken ?? undefined,
       timeBudgetMs: remaining() - 5_000,  // 5 s margin for DB writes
       maxPages:     MAX_PAGES_PER_INVOCATION,
     });
 
-    followers    = [...followers, ...result.edges];
+    followers    = deduplicateEdges([...followers, ...result.edges]);
     pagesDone   += result.pagesFetched;
-    followersCursor = result.nextCursor;
+    followersCursor = encodeCursorField(result.nextCursor, result.rankToken);
 
     if (result.stopReason && result.stopReason !== "PAGE_LIMIT_REACHED") {
       // Fatal Instagram error — fail the job
       const mode = FAILURE_MODES[result.stopReason];
       await failJob(db, job.id, mode?.uiMessage ?? result.stopReason);
-      return makeResult(job.id, "failed", phase, pagesDone, followers.length, following.length, true, mode?.uiMessage ?? result.stopReason);
+      return mk("failed", phase, pagesDone, followers.length, following.length, true, mode?.uiMessage ?? result.stopReason);
     }
 
     const followersPhaseDone = result.isComplete || result.nextCursor === null;
@@ -124,7 +164,7 @@ export async function runSnapshotChunk(
       console.log(`[job ${job.id}] followers complete (${followers.length} edges). Advancing to following.`);
     } else {
       console.log(`[job ${job.id}] followers chunk done: ${followers.length} so far, cursor saved.`);
-      return makeResult(job.id, "running", "followers", pagesDone, followers.length, following.length, false, `Fetched ${followers.length} followers so far…`);
+      return mk("running", "followers", pagesDone, followers.length, following.length, false, `Fetched ${followers.length} followers so far…`);
     }
   }
 
@@ -145,23 +185,26 @@ export async function runSnapshotChunk(
       if (rem < ADVANCE_THRESHOLD_MS) {
         // Not enough time — defer to next invocation
         console.log(`[job ${job.id}] following deferred (${rem}ms remaining)`);
-        return makeResult(job.id, "running", "following", pagesDone, followers.length, following.length, false, "Fetching following list…");
+        return mk("running", "following", pagesDone, followers.length, following.length, false, "Fetching following list…");
       }
 
+      const { cursor: actualFollowingCursor, rankToken: savedFollowingRankToken } = parseCursorField(followingCursor);
+
       const result = await fetchEdgeListChunked(igUserId, "following", cookie, {
-        startCursor:  followingCursor,
+        startCursor:  actualFollowingCursor,
+        rankToken:    savedFollowingRankToken ?? undefined,
         timeBudgetMs: remaining() - 5_000,
         maxPages:     MAX_PAGES_PER_INVOCATION,
       });
 
-      following    = [...following, ...result.edges];
+      following    = deduplicateEdges([...following, ...result.edges]);
       pagesDone   += result.pagesFetched;
-      followingCursor = result.nextCursor;
+      followingCursor = encodeCursorField(result.nextCursor, result.rankToken);
 
       if (result.stopReason && result.stopReason !== "PAGE_LIMIT_REACHED") {
         const mode = FAILURE_MODES[result.stopReason];
         await failJob(db, job.id, mode?.uiMessage ?? result.stopReason);
-        return makeResult(job.id, "failed", phase, pagesDone, followers.length, following.length, true, mode?.uiMessage ?? result.stopReason);
+        return mk("failed", phase, pagesDone, followers.length, following.length, true, mode?.uiMessage ?? result.stopReason);
       }
 
       const followingPhaseDone = result.isComplete || result.nextCursor === null;
@@ -179,7 +222,7 @@ export async function runSnapshotChunk(
         console.log(`[job ${job.id}] following complete (${following.length} edges). Advancing to finalize.`);
       } else {
         console.log(`[job ${job.id}] following chunk done: ${following.length} so far.`);
-        return makeResult(job.id, "running", "following", pagesDone, followers.length, following.length, false, "Fetching following list…");
+        return mk("running", "following", pagesDone, followers.length, following.length, false, "Fetching following list…");
       }
     }
   }
@@ -190,8 +233,17 @@ export async function runSnapshotChunk(
       const capturedAt = job.captured_at ?? new Date().toISOString();
       const igAccountId = job.ig_account_id;
 
-      const followerCount  = Math.max(job.follower_count_api ?? 0, followers.length);
-      const followingCount = Math.max(job.following_count_api ?? 0, following.length);
+      // When the list fetch completed fully (no remaining cursor), the edge
+      // array *is* the source of truth. The API profile count is cached and
+      // can lag behind reality. Only prefer the API count when the capture
+      // was partial so we don't underreport.
+      const isListComplete = job.followers_cursor === null && job.following_cursor === null;
+      const followerCount  = isListComplete
+        ? followers.length
+        : Math.max(job.follower_count_api ?? 0, followers.length);
+      const followingCount = isListComplete
+        ? following.length
+        : Math.max(job.following_count_api ?? 0, following.length);
 
       // Mutual count
       const followerKeySet = new Set(
@@ -200,8 +252,6 @@ export async function runSnapshotChunk(
       const mutualCount = following.filter(
         (e: IgEdge) => followerKeySet.has(e.ig_id ? e.ig_id : `@${e.username.toLowerCase()}`),
       ).length;
-
-      const isListComplete = job.followers_cursor === null && job.following_cursor === null;
 
       // Insert follower_snapshots row
       const { data: snapshot, error: snapErr } = await db
@@ -297,25 +347,87 @@ export async function runSnapshotChunk(
         longest_streak_days: newLongest,
       }).eq("id", igAccountId);
 
-      // Mark job complete
-      await db.from("snapshot_jobs").update({
+      // Mark job complete — conditional: only if the job is still "running".
+      // If two requests race into finalize, the second one will match 0 rows
+      // and skip the push, preventing a duplicate notification.
+      const { data: markedComplete } = await db.from("snapshot_jobs").update({
         status:     "complete",
         phase:      "finalize",
         updated_at: new Date().toISOString(),
-      }).eq("id", job.id);
+      })
+        .eq("id", job.id)
+        .eq("status", "running")
+        .select("id")
+        .maybeSingle();
+
+      // ── Send "snapshot ready" push notification ─────────────────────
+      // Only send if we were the request that flipped status →0 complete.
+      if (markedComplete) try {
+        const { data: profile } = await db
+          .from("profiles")
+          .select("push_token")
+          .eq("id", job.user_id)
+          .maybeSingle();
+
+        const { data: notifPrefs } = await db
+          .from("user_settings")
+          .select("notify_refresh_complete")
+          .eq("user_id", job.user_id)
+          .maybeSingle();
+
+        const shouldNotify = profile?.push_token &&
+          (notifPrefs?.notify_refresh_complete ?? true);
+
+        if (shouldNotify) {
+          // Build a personalised body using diff data when available
+          let body = "Your latest snapshot is ready. Open StayReel to see your results.";
+
+          if (diffId) {
+            const { data: diffRow } = await db
+              .from("diffs")
+              .select("net_follower_change, lost_followers")
+              .eq("id", diffId)
+              .maybeSingle();
+
+            if (diffRow) {
+              const net = diffRow.net_follower_change ?? 0;
+              const lost = Array.isArray(diffRow.lost_followers) ? diffRow.lost_followers.length : 0;
+
+              if (net > 0) {
+                body = `You gained ${net} follower${net !== 1 ? "s" : ""} since your last snapshot! 📈`;
+              } else if (lost > 0) {
+                body = `${lost} account${lost !== 1 ? "s" : ""} unfollowed since last time. Tap to see who.`;
+              } else {
+                body = "Snapshot complete — no follower changes detected. You\u2019re all good! \u2713";
+              }
+            }
+          }
+
+          await sendPushNotification(
+            profile.push_token,
+            "Snapshot Ready \uD83D\uDCF8",
+            body,
+            { screen: "dashboard" },
+          );
+          console.log(`[job ${job.id}] push notification sent.`);
+        }
+      } catch (notifErr) {
+        // Non-fatal — never let a notification failure break the snapshot flow
+        console.warn("[job finalize] push notification error:", (notifErr as Error).message);
+      }
 
       console.log(`[job ${job.id}] finalized: snapshot ${snapshot.id}, ${followerCount} followers, ${followingCount} following`);
-      return makeResult(job.id, "complete", "finalize", pagesDone, followers.length, following.length, true, "Snapshot complete.", followingFromCache);
+      return mk("complete", "finalize", pagesDone, followers.length, following.length, true, "Snapshot complete.", followingFromCache);
 
     } catch (err) {
       const msg = (err as Error).message ?? "Finalization error";
       await failJob(db, job.id, msg);
-      return makeResult(job.id, "failed", "finalize", pagesDone, followers.length, following.length, true, msg);
+      return mk("failed", "finalize", pagesDone, followers.length, following.length, true, msg);
     }
   }
 
   // Should never reach here
-  return makeResult(job.id, "failed", phase, pagesDone, followers.length, following.length, true, "Unknown phase");
+  return mk("failed", phase, pagesDone, followers.length, following.length, true, "Unknown phase");
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -339,6 +451,8 @@ function makeResult(
   done: boolean,
   message: string,
   followingCached = false,
+  followerCountApi = 0,
+  followingCountApi = 0,
 ): ChunkResult {
-  return { jobId, status, phase, pagesDone, followersSeen, followingSeen, done, message, followingCached };
+  return { jobId, status, phase, pagesDone, followersSeen, followingSeen, followerCountApi, followingCountApi, done, message, followingCached };
 }

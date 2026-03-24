@@ -266,7 +266,9 @@ export function SnapshotErrorCard({ error, onDismiss }: Props) {
         </View>
 
         {/* Raw error code for reference */}
-        <Text style={styles.errorCode}>Error code: {code}</Text>
+        <Text style={styles.errorCode}>
+          Error code: {code}{error instanceof SnapshotError && error.message ? ` — ${error.message}` : ''}
+        </Text>
 
       </View>
     </View>

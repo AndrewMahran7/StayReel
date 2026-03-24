@@ -11,16 +11,25 @@ import {
   ScrollView,
   ActivityIndicator,
   Linking,
+  Switch,
+  Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { useRouter } from 'expo-router';
 import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/store/authStore';
 import { useAdStore } from '@/store/adStore';
+import { useSubscriptionStore } from '@/store/subscriptionStore';
 import { RemoveAdsSheet } from '@/components/RemoveAdsSheet';
+import { PaywallModal } from '@/components/PaywallModal';
+import { unregisterPushToken } from '@/lib/notifications';
+import { showCustomerCenter, restorePurchases, isProFromInfo } from '@/lib/revenueCat';
+import { useNotificationSettings, NotificationPrefs } from '@/hooks/useNotificationSettings';
+import { SchoolPickerModal } from '@/components/SchoolPickerModal';
+import { schoolLabel } from '@/lib/schools';
 import C from '@/lib/colors';
 
 export default function SettingsScreen() {
@@ -33,6 +42,43 @@ export default function SettingsScreen() {
   const [disconnecting, setDisconnecting] = useState(false);
   const [deleting,      setDeleting]      = useState(false);
   const [showRemoveAds, setShowRemoveAds] = useState(false);
+  const [showPaywall, setShowPaywall] = useState(false);
+  const [showSchoolPicker, setShowSchoolPicker] = useState(false);
+  const { settings: notifPrefs, update: updateNotifPref } = useNotificationSettings();
+
+  // Subscription
+  const isPro  = useSubscriptionStore((s) => s.isPro);
+  const status = useSubscriptionStore((s) => s.status);
+  const expiresAt = useSubscriptionStore((s) => s.expiresAt);
+
+  const planLabel = isPro
+    ? status === 'trial' ? 'Free Trial' : 'Pro'
+    : 'Free';
+
+  const expiryLabel = expiresAt
+    ? new Date(expiresAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+    : null;
+
+  // School attribution — shared query key so picker invalidation refreshes here
+  const { data: schoolId = null } = useQuery<string | null>({
+    queryKey: ['profile-school', user?.id],
+    enabled: !!user,
+    staleTime: 60_000,    // refetch periodically instead of never
+    queryFn: async () => {
+      const { data } = await supabase
+        .from('profiles')
+        .select('school')
+        .eq('id', user!.id)
+        .maybeSingle();
+      return data?.school ?? null;
+    },
+  });
+
+  const toggleNotif = (key: keyof NotificationPrefs) => {
+    updateNotifPref({ [key]: !notifPrefs[key] }).catch(() =>
+      Alert.alert('Error', 'Could not save notification preference.'),
+    );
+  };
 
   // ── Disconnect IG account ─────────────────────────────────
   const handleDisconnect = () => {
@@ -96,6 +142,9 @@ export default function SettingsScreen() {
 
   // ── Sign out ──────────────────────────────────────────────
   const handleSignOut = async () => {
+    // Detach push token BEFORE destroying the session — the
+    // RLS-protected profile update requires an active JWT.
+    await unregisterPushToken().catch(() => {});
     await supabase.auth.signOut();
     setSession(null);
     setIgAccountId(null);
@@ -140,6 +189,131 @@ export default function SettingsScreen() {
             destructive={false}
           />
         )}
+
+        <ActionRow
+          icon="school-outline"
+          iconColor={C.teal}
+          title="School"
+          subtitle={schoolLabel(schoolId)}
+          onPress={() => setShowSchoolPicker(true)}
+        />
+
+        {/* Subscription section */}
+        <SectionHeader title="Subscription" />
+
+        <SettingRow
+          icon="diamond-outline"
+          iconColor={C.teal}
+          title="Current plan"
+          value={planLabel}
+        />
+
+        {isPro && expiryLabel && (
+          <SettingRow
+            icon="calendar-outline"
+            iconColor={C.textSecondary}
+            title={status === 'trial' ? 'Trial ends' : 'Renews'}
+            value={expiryLabel}
+          />
+        )}
+
+        {!isPro && (
+          <ActionRow
+            icon="rocket-outline"
+            iconColor={C.accent}
+            title="Upgrade to Pro"
+            subtitle="Unlimited snapshots & more"
+            onPress={() => setShowPaywall(true)}
+          />
+        )}
+
+        {!isPro && (
+          <ActionRow
+            icon="refresh-outline"
+            iconColor={C.textSecondary}
+            title="Restore Purchases"
+            subtitle="Already subscribed on another device?"
+            onPress={async () => {
+              try {
+                const info = await restorePurchases();
+                if (isProFromInfo(info)) {
+                  useSubscriptionStore.getState().setProFromInfo(info);
+                  Alert.alert('Restored', 'Your subscription has been restored.');
+                } else {
+                  Alert.alert('No Subscription', "We couldn't find an active subscription for this account.");
+                }
+              } catch (e: any) {
+                Alert.alert('Error', e?.message ?? 'Restore failed.');
+              }
+            }}
+          />
+        )}
+
+        {isPro && (
+          <ActionRow
+            icon="settings-outline"
+            iconColor={C.textSecondary}
+            title="Manage subscription"
+            subtitle="Change plan, cancel, or get help"
+            onPress={() => showCustomerCenter()}
+          />
+        )}
+
+        {isPro && (
+          <ActionRow
+            icon="close-circle-outline"
+            iconColor={C.red}
+            title="Cancel subscription"
+            subtitle={Platform.OS === 'ios' ? 'Opens App Store settings' : 'Opens Play Store settings'}
+            onPress={() => {
+              const url =
+                Platform.OS === 'ios'
+                  ? 'https://apps.apple.com/account/subscriptions'
+                  : 'https://play.google.com/store/account/subscriptions';
+              Linking.openURL(url);
+            }}
+          />
+        )}
+
+        {/* Notifications section */}
+        <SectionHeader title="Notifications" />
+
+        <ToggleRow
+          icon="checkmark-done-outline"
+          iconColor={C.green}
+          title="Snapshot ready"
+          subtitle="When your follower refresh finishes"
+          value={notifPrefs.notify_refresh_complete}
+          onToggle={() => toggleNotif('notify_refresh_complete')}
+        />
+
+        <ToggleRow
+          icon="calendar-outline"
+          iconColor={C.teal}
+          title="Weekly summary"
+          subtitle="Your follower movement each week"
+          value={notifPrefs.notify_weekly_summary}
+          onToggle={() => toggleNotif('notify_weekly_summary')}
+        />
+
+        <ToggleRow
+          icon="people-outline"
+          iconColor={C.accent}
+          title="Unfollow alerts"
+          subtitle="Included in your weekly summary"
+          value={notifPrefs.notify_on_unfollow}
+          onToggle={() => toggleNotif('notify_on_unfollow')}
+        />
+
+        <ToggleRow
+          icon="key-outline"
+          iconColor={C.textMuted}
+          title="Session expiry"
+          subtitle="Coming soon"
+          value={false}
+          onToggle={() => {}}
+          disabled
+        />
 
         {/* Ads section */}
         <SectionHeader title="Ads" />
@@ -221,6 +395,12 @@ export default function SettingsScreen() {
       </ScrollView>
 
       <RemoveAdsSheet visible={showRemoveAds} onClose={() => setShowRemoveAds(false)} />
+      <PaywallModal visible={showPaywall} onClose={() => setShowPaywall(false)} />
+      <SchoolPickerModal
+        visible={showSchoolPicker}
+        userId={user?.id ?? ''}
+        onDone={() => setShowSchoolPicker(false)}
+      />
     </SafeAreaView>
   );
 }
@@ -277,6 +457,36 @@ function ActionRow({ icon, iconColor, title, subtitle, onPress, loading, destruc
         : <Ionicons name="chevron-forward" size={16} color={C.textMuted} />
       }
     </TouchableOpacity>
+  );
+}
+
+interface ToggleRowProps {
+  icon:      string;
+  iconColor: string;
+  title:     string;
+  subtitle?: string;
+  value:     boolean;
+  onToggle:  () => void;
+  disabled?: boolean;
+}
+function ToggleRow({ icon, iconColor, title, subtitle, value, onToggle, disabled }: ToggleRowProps) {
+  return (
+    <View style={[sStyles.row, disabled && { opacity: 0.45 }]}>
+      <View style={[sStyles.iconWrap, { backgroundColor: iconColor + '22' }]}>
+        <Ionicons name={icon as any} size={18} color={iconColor} />
+      </View>
+      <View style={sStyles.rowBody}>
+        <Text style={sStyles.rowTitle}>{title}</Text>
+        {subtitle && <Text style={sStyles.rowSub}>{subtitle}</Text>}
+      </View>
+      <Switch
+        value={value}
+        onValueChange={onToggle}
+        disabled={disabled}
+        trackColor={{ false: '#3e3e3e', true: C.accent + '88' }}
+        thumbColor={value ? C.accent : '#888'}
+      />
+    </View>
   );
 }
 

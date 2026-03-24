@@ -1,7 +1,42 @@
-﻿# StayReel  Instagram Follower Tracker
+# StayReel
 
-A privacy-first React Native app (Expo) that tracks your Instagram follower changes over time.
-Built with **Expo Router v4**, **Supabase**, **React Query**, and **Google Mobile Ads**.
+**Privacy-first Instagram follower tracker for iOS and Android.**
+
+Track who followed you, who unfollowed you, and who doesn't follow back — without ads in your face and without your data being sold. Built and maintained by one developer.
+
+---
+
+## Features
+
+- **Magic-link sign-in** — no password required, deep-link callback handled automatically
+- **Instagram connection** — connect via your `sessionid` cookie, stored AES-256 encrypted in Supabase Vault
+- **Resumable snapshots** — chunked job system handles 25k+ follower accounts without server timeouts
+- **5 diff categories** — New followers, Unfollowed you, Not following you back, You don't follow back, You unfollowed
+- **Growth chart** — 7-day and 30-day follower count history
+- **Streak tracking** — current and longest snapshot streak
+- **Weekly summary** — new and lost follower counts over the last 7 days
+- **Searchable lists** — paginated, searchable, tapping opens the Instagram profile
+- **Tap the Dot mini-game** — playable during snapshot loading instead of showing an ad
+- **Snapshot error guidance** — plain-English error cards for session expiry, rate limits, and Instagram challenges
+- **Troubleshooting screen** — expandable accordion explaining every common error and how to fix it
+- **Our Promise screen** — documents what the app will and won't ever do
+- **Remove ads** — watch one rewarded ad to go ad-free for 7 days
+
+---
+
+## Tech Stack
+
+| Layer | Choice |
+|---|---|
+| Mobile framework | Expo SDK 54 / React Native 0.81 |
+| Navigation | Expo Router v6 (file-based) |
+| Language | TypeScript |
+| Data fetching | TanStack React Query v5 |
+| Global state | Zustand v5 |
+| Backend | Supabase (Auth, Postgres, Edge Functions, Vault) |
+| Edge runtime | Deno (Supabase Edge Functions) |
+| Ads | react-native-google-mobile-ads |
+| Build/deploy | EAS Build + EAS Submit |
 
 ---
 
@@ -9,175 +44,159 @@ Built with **Expo Router v4**, **Supabase**, **React Query**, and **Google Mobil
 
 | Screen | Route | Description |
 |---|---|---|
-| Sign In | `/(auth)/sign-in` | Magic-link + App Store review password bypass |
-| Connect Instagram | `/(auth)/connect-instagram` | Enter username + paste `sessionid` cookie |
-| Dashboard | `/(tabs)/dashboard` | 5 stat cards, growth chart, streak, manual refresh with progress + mini-game |
-| Lists | `/(tabs)/lists` | Searchable, paginated follower lists |
-| Settings | `/(tabs)/settings` | Disconnect, delete data, ad consent |
+| Sign In | `/(auth)/sign-in` | Magic-link entry; App Store review password bypass |
+| Connect Instagram | `/(auth)/connect-instagram` | Session cookie entry + step-by-step CookieHelpModal |
+| Magic-link callback | `/auth` | Exchanges deep-link code for a Supabase session |
+| Dashboard | `/(tabs)/dashboard` | Metrics, chart, streak, snapshot button, mini-game |
+| Lists | `/(tabs)/lists` | Searchable, paginated diff lists (5 types) |
+| Settings | `/(tabs)/settings` | Account, ads, privacy, danger zone, about |
+| Our Promise | `/our-promise` | Product values and what will never happen |
+| Troubleshooting | `/troubleshooting` | Expandable error guide with step-by-step fixes |
+
+---
+
+## Architecture
+
+### Snapshot Job System
+
+Manual captures use a **resumable chunked job** to avoid the 150-second Edge Function limit:
+
+1. `snapshot-start` — creates a `snapshot_jobs` row, runs the first ~45 pages (~900 followers)
+2. App polls `snapshot-continue` every ~1 second — each call runs the next chunk within a 75-second budget
+3. Three phases: `followers` → `following` → `finalize`
+4. `finalize` writes `follower_snapshots`, `follower_edges`, diffs, and updates the streak
+5. Job cursor is persisted after every chunk — a crash or network blip is safely resumed
+
+**Cooldown:** 1 snapshot per hour per account, enforced server-side.
+
+### Edge Functions
+
+| Function | Purpose |
+|---|---|
+| `connect-instagram` | Validates session cookie, stores in Vault, upserts `ig_accounts` |
+| `snapshot-start` | Creates job, runs first follower chunk |
+| `snapshot-continue` | Runs next chunk for an in-progress job |
+| `diffs-latest` | Returns dashboard metrics + `next_snapshot_allowed_at` |
+| `list-users` | Paginated follower lists (5 types) |
+| `snapshot-history` | Historical counts for growth chart |
+| `capture-snapshot` | Legacy single-call capture (cron) |
+| `status` | Health check |
+| `admin-reset-quota` | **Dev only** — resets quota / clears snapshot data |
+
+### Database Tables
+
+| Table | Purpose |
+|---|---|
+| `profiles` | One row per auth user |
+| `ig_accounts` | Connected Instagram accounts; holds Vault secret ID and streak |
+| `follower_snapshots` | Per-capture counts; raw JSON kept 30 days then nulled |
+| `follower_edges` | Normalised per-follower rows, indexed for set-diff queries |
+| `diffs` | Pre-computed diff between consecutive snapshots |
+| `snapshot_jobs` | Resumable job state (cursor, phase, accumulated JSON) |
+| `snapshot_quota` | Per-user daily quota counter |
+| `audit_events` | Immutable event log |
+| `user_settings` | Per-user preferences (consent, ads removed TTL, etc.) |
+
+Row-Level Security is enabled on every table. Edge Functions use the service-role `adminClient` internally.
 
 ---
 
 ## Project Structure
 
 ```
-stayreel/
- app/
-    _layout.tsx              Root layout (providers + auth guard)
-    auth.tsx                 Deep-link handler for magic-link callbacks
-    (auth)/
-       _layout.tsx
-       sign-in.tsx
-       connect-instagram.tsx
-    (tabs)/
-        _layout.tsx          Bottom tab navigator
-        dashboard.tsx
-        lists.tsx
-        settings.tsx
- components/
-    BannerAdView.tsx         AdMob banner (hidden when ads removed)
-    ConsentModal.tsx         First-launch GDPR consent
-    CookieHelpModal.tsx      Step-by-step IG cookie guide
-    DashboardCard.tsx        Stat card with left-accent border
-    GrowthChart.tsx          Follower count line chart (7d / 30d)
-    RemoveAdsSheet.tsx       "Watch ad to remove ads for 7 days"
-    SearchBar.tsx
-    StatsRow.tsx             Followers / Following / Friends counts
-    StreakBadge.tsx          Current & longest streak display
-    TapTheDotGameModal.tsx   Mini-game played during snapshot loading
-    UserListItem.tsx
-    WeeklySummaryCard.tsx    7-day new/lost follower summary
- hooks/
-    useDashboard.ts          React Query: fetch diffs-latest summary
-    useInterstitialAd.ts     AdMob interstitial (frequency-capped)
-    useListData.ts           React Query: infinite paginated list
-    useRewardedAd.ts         AdMob rewarded (ad-removal)
-    useSnapshotCapture.ts    Resumable job system: start  poll  done
-    useSnapshotHistory.ts    React Query: follower count history for chart
-    useTapDotHighScore.ts    AsyncStorage persistence for mini-game score
- lib/
-    adUnits.ts               Ad unit ID resolver (test vs prod)
-    colors.ts                Design token palette
-    queryClient.ts           TanStack Query client config
-    supabase.ts              Supabase client + deep-link handler
- store/
-    adStore.ts               Zustand: ad consent + removal TTL
-    authStore.ts             Zustand: session + ig_account_id
- supabase/
-     migrations/              001013 applied to production
-     functions/
-         _shared/             auth, cors, errors, instagram, rate_limit, snapshotJob, vault, 
-         capture-snapshot/    Legacy single-call capture (cron)
-         connect-instagram/
-         diffs-latest/        Dashboard metrics + next_snapshot_allowed_at
-         list-users/          Paginated follower lists
-         snapshot-continue/   Poll next chunk of a running job
-         snapshot-history/    Historical counts for growth chart
-         snapshot-start/      Create job + run first chunk
-         status/
-         admin-reset-quota/   Dev only
+app/
+  _layout.tsx              Root layout (providers, auth guard, deep-link handler)
+  auth.tsx                 Magic-link callback screen
+  index.tsx                Redirect splash
+  our-promise.tsx          Product values screen
+  troubleshooting.tsx      Error guide screen
+  (auth)/
+    sign-in.tsx
+    connect-instagram.tsx
+  (tabs)/
+    _layout.tsx
+    dashboard.tsx
+    lists.tsx
+    settings.tsx
+
+components/
+  BannerAdView.tsx         AdMob banner (hidden when ads removed or no consent)
+  ConsentModal.tsx         First-launch GDPR/ATT consent sheet
+  CookieHelpModal.tsx      Step-by-step Instagram cookie guide
+  DashboardCard.tsx        Stat card with left-accent border and icon
+  GrowthChart.tsx          Follower count line chart (7d / 30d toggle)
+  RemoveAdsSheet.tsx       Rewarded-ad flow to go ad-free for 7 days
+  SearchBar.tsx
+  SnapshotErrorCard.tsx    Inline snapshot error with user-friendly guidance
+  StatsRow.tsx             Followers / Following / Friends pill row
+  StreakBadge.tsx          Current and longest streak display
+  TapTheDotGameModal.tsx   Mini-game played during snapshot loading
+  UserListItem.tsx         Avatar + @username row
+  WeeklySummaryCard.tsx    7-day new/lost follower summary
+
+hooks/
+  useDashboard.ts          React Query: fetch diffs-latest metrics
+  useListData.ts           React Query: infinite-paginated list
+  useSnapshotCapture.ts    Manages start → poll → done job flow; exposes live progress
+  useSnapshotHistory.ts    React Query: historical counts for GrowthChart
+  useInterstitialAd.ts     Frequency-capped AdMob interstitial
+  useRewardedAd.ts         AdMob rewarded for the remove-ads flow
+  useTapDotHighScore.ts    AsyncStorage persistence for mini-game high score
+
+lib/
+  adUnits.ts               Ad unit ID resolver (test vs production)
+  colors.ts                Design token palette
+  queryClient.ts           TanStack Query client config
+  supabase.ts              Supabase client singleton + deep-link handler
+
+store/
+  authStore.ts             Zustand: session + igAccountId (AsyncStorage-persisted)
+  adStore.ts               Zustand: consent state, ads-removed expiry, tab open counter
+
+supabase/
+  migrations/              001–013, all applied to production
+  functions/
+    _shared/               auth, cors, errors, instagram, rate_limit, snapshotJob, vault, notify
+    connect-instagram/
+    snapshot-start/
+    snapshot-continue/
+    diffs-latest/
+    list-users/
+    snapshot-history/
+    capture-snapshot/
+    status/
+    admin-reset-quota/
+  templates/
+    magic-link.html
+    confirmation.html
 ```
-
----
-
-## Prerequisites
-
-- Node.js 20+
-- [Expo CLI](https://docs.expo.dev/get-started/installation/): `npm i -g expo-cli`
-- [EAS CLI](https://docs.expo.dev/eas/): `npm i -g eas-cli`
-- Supabase project with the migrations in `supabase/migrations/` applied
-- Google AdMob account (test IDs work out of the box)
 
 ---
 
 ## Quick Start
 
+### Prerequisites
+
+- Node.js 20+
+- Expo CLI: `npm i -g expo-cli`
+- EAS CLI: `npm i -g eas-cli`
+- Supabase project with migrations applied
+
+### Install and run
+
 ```bash
-# 1. Install dependencies
 npm install
-
-# 2. Configure environment
-cp .env.example .env
-# Edit .env and set EXPO_PUBLIC_SUPABASE_URL + EXPO_PUBLIC_SUPABASE_ANON_KEY
-
-# 3. Start the dev server (Expo Go)
-npx expo start
+npx expo start          # Expo Go (no ads — native build required for ads)
+npx expo run:ios        # iOS simulator with native modules
+npx expo run:android    # Android emulator with native modules
 ```
 
-> **Note:** `react-native-google-mobile-ads` requires a **native build** to show real ads.
-> In Expo Go the ad components render nothing (this is normal).
-> Use `npx expo run:ios` / `npx expo run:android` or EAS Build for ad testing.
-
----
-
-## Native Build (Ad Testing)
+### EAS Build (physical device / App Store submission)
 
 ```bash
-# iOS simulator
-npx expo run:ios
-
-# Android emulator
-npx expo run:android
-```
-
-### EAS Build (physical device / submission)
-
-```bash
-npm i -g eas-cli
 eas login
 eas build --profile production --platform ios --auto-submit
 ```
-
----
-
-## Snapshot Job System
-
-Manual snapshots use a **resumable chunked job** architecture to handle accounts with 25k+ followers without hitting the 150 s Edge Function timeout.
-
-1. App calls `POST /snapshot-start`  creates a `snapshot_jobs` row and runs the first ~45 pages of followers.
-2. App polls `POST /snapshot-continue` every 1 s, each call running the next chunk within a 75 s budget.
-3. Once all followers **and** following are fetched, the `finalize` phase writes `follower_snapshots`, `follower_edges`, diffs, and updates the streak.
-4. The `snapshot_jobs` row persists cursor state between calls, so a crash or network blip is safely resumed.
-
-Cooldown: **1 hour** per account (enforced via `ig_accounts.last_snapshot_at`).
-
----
-
-## iOS AdMob Setup
-
-1. Create an AdMob account at [admob.google.com](https://admob.google.com).
-2. Create an iOS App in AdMob  copy the **App ID** (format: `ca-app-pub-XXXX~YYYY`).
-3. Update `app.json`:
-   ```json
-   "plugins": [
-     ["react-native-google-mobile-ads", {
-       "iosAppId": "ca-app-pub-6049273265076763~7693569711",
-       "androidAppId": "ca-app-pub-XXXX~YYYY"
-     }]
-   ]
-   ```
-4. Create three ad units (Banner, Interstitial, Rewarded) and paste the IDs into `lib/adUnits.ts`.
-5. Add your Apple App ID to AdMob for SKAdNetwork attribution.
-
-### Test Ad Units (always safe in development)
-
-| Format | iOS | Android |
-|---|---|---|
-| Banner | `ca-app-pub-3940256099942544/2934735716` | `ca-app-pub-3940256099942544/6300978111` |
-| Interstitial | `ca-app-pub-3940256099942544/4411468910` | `ca-app-pub-3940256099942544/1033173712` |
-| Rewarded | `ca-app-pub-3940256099942544/1712485313` | `ca-app-pub-3940256099942544/5224354917` |
-
----
-
-## Ad Logic
-
-| Event | Ad Shown |
-|---|---|
-| Dashboard / Lists screen | Banner (top, anchored adaptive) |
-| Every 3rd list-type tab switch | Interstitial |
-| After successful snapshot capture | Interstitial (if ready) |
-| Settings  "Remove ads for 7 days" | Rewarded  7-day ad-free period |
-
-Frequency caps are enforced in `store/adStore.ts` (`INTERSTITIAL_EVERY_N_OPENS = 3`).
 
 ---
 
@@ -185,18 +204,10 @@ Frequency caps are enforced in `store/adStore.ts` (`INTERSTITIAL_EVERY_N_OPENS =
 
 ```bash
 npm i -g supabase
-supabase link --project-ref your-project-ref
-
-# Apply all migrations (001013)
-supabase db push
-
-# Deploy all Edge Functions
-supabase functions deploy --no-verify-jwt
-```
-
-Required secret:
-```bash
-supabase secrets set SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
+supabase link --project-ref <your-project-ref>
+supabase db push                              # apply migrations 001–013
+supabase functions deploy --no-verify-jwt    # deploy all Edge Functions
+supabase secrets set SUPABASE_SERVICE_ROLE_KEY=<key>
 ```
 
 ---
@@ -207,31 +218,46 @@ supabase secrets set SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
 |---|---|
 | `EXPO_PUBLIC_SUPABASE_URL` | Supabase project URL |
 | `EXPO_PUBLIC_SUPABASE_ANON_KEY` | Supabase anon/public key |
-| `EXPO_PUBLIC_DEV_EMAIL` | App Store review test account email |
-| `EXPO_PUBLIC_DEV_PASSWORD` | App Store review test account password |
+| `EXPO_PUBLIC_DEV_EMAIL` | App Store review test email |
+| `EXPO_PUBLIC_DEV_PASSWORD` | App Store review test password |
 
-`EXPO_PUBLIC_DEV_EMAIL` and `EXPO_PUBLIC_DEV_PASSWORD` are stored as EAS secrets and embedded at build time.
-On the sign-in screen, entering the dev email reveals a password field and signs in directly (no magic link required)  used by App Store reviewers.
+`EXPO_PUBLIC_DEV_EMAIL` and `EXPO_PUBLIC_DEV_PASSWORD` are stored as EAS secrets and embedded at build time. Entering the dev email on the sign-in screen reveals a password field — no magic link is sent. Used by App Store reviewers.
 
 ---
 
-## App Store Review Login
+## Ad Setup
 
-**Email:** `dev@stayreel.test`  
-**Password:** `devpass123`
+1. Create an AdMob account and an app entry for iOS and Android.
+2. Copy the App IDs into `app.json` under the `react-native-google-mobile-ads` plugin.
+3. Create three ad units (Banner, Interstitial, Rewarded) and paste the IDs into `lib/adUnits.ts`.
 
-Enter the email on the sign-in screen  a password field appears automatically. No email is sent.
+| Event | Ad shown |
+|---|---|
+| Dashboard / Lists screen | Banner (top, anchored) |
+| Every 3rd list-tab switch | Interstitial |
+| After a successful snapshot | Interstitial (if ready) |
+| Settings → "Remove ads for 7 days" | Rewarded → 7-day ad-free period |
 
 ---
 
 ## Key Design Decisions
 
-- **No passwords stored**  only the Instagram `sessionid` cookie, AES-256 encrypted via Supabase Vault.
-- **Resumable snapshot jobs**  chunked pagination survives the 150 s Edge Function timeout; cursor persisted in `snapshot_jobs` table.
-- **1-hour cooldown**  one manual snapshot per hour per account.
-- **ig_id matching**  users who rename their Instagram handle are not counted as lost+new.
-- **30-day TTL on raw follower lists**  raw JSON nulled by pg_cron; diff results kept forever.
-- **Consent first**  `ConsentModal` blocks ad initialisation until the user makes a choice.
+- **No passwords stored** — only the Instagram `sessionid` cookie, AES-256 encrypted via Supabase Vault.
+- **Resumable jobs** — chunked pagination survives the 150-second Edge Function limit; cursor is persisted in `snapshot_jobs`.
+- **1-hour cooldown** — one manual snapshot per hour per account to protect the user's Instagram account.
+- **ig_id matching** — users who rename their Instagram handle are not counted as lost + new followers.
+- **30-day TTL on raw lists** — raw follower JSON is nulled by pg_cron after 30 days; diff results are kept indefinitely.
+- **Consent first** — `ConsentModal` blocks ad initialisation until the user makes an explicit choice.
+- **Mini-game over ads** — the Tap the Dot game is shown during snapshot loading as a user-respecting alternative to interstitial ads.
+
+---
+
+## Known Limitations
+
+- Instagram's private API may throttle or break at any time; `big_list` mode returns ~19 users/page on many accounts.
+- No UI indicator yet when a snapshot is partial (`is_list_complete = false`) — reciprocity numbers may undercount.
+- No automated tests or CI/CD pipeline.
+- `admin-reset-quota` is still deployed to production — should be removed or key-guarded before wide release.
 
 ---
 

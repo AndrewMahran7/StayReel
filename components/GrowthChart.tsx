@@ -18,7 +18,7 @@ import C from '@/lib/colors';
 const WINDOW_WIDTH = Dimensions.get('window').width;
 const CHART_W      = WINDOW_WIDTH - 32 - 2; // 16px frame padding each side
 const CHART_H      = 140;
-const PAD          = { top: 16, bottom: 40, left: 44, right: 12 };
+const PAD          = { top: 16, bottom: 40, left: 44, right: 24 };
 const INNER_W      = CHART_W - PAD.left - PAD.right;
 const INNER_H      = CHART_H - PAD.top  - PAD.bottom;
 
