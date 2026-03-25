@@ -57,11 +57,20 @@ async function applyCode(code: string): Promise<boolean> {
         body: JSON.stringify({ code: code.trim().toLowerCase() }),
       },
     );
-    const json = await res.json();
-    if (json.attributed) {
-      setReferralAttribute(code.trim().toLowerCase());
+
+    // Defensive: parse JSON safely — gateway 502 may return HTML
+    let json: Record<string, unknown> | null = null;
+    try {
+      json = await res.json();
+    } catch {
+      // Non-JSON response body
     }
-    return json.attributed === true;
+
+    if (json?.success === true) {
+      setReferralAttribute(code.trim().toLowerCase());
+      return true;
+    }
+    return false;
   } catch (err) {
     console.warn('[Referral] applyCode error:', err);
     return false;
@@ -74,17 +83,35 @@ export function useReferralPrompt() {
   const qc          = useQueryClient();
   const autoApplied = useRef(false);
 
+  // Session-level guard: once dismissed, never show again this session.
+  // Prevents the show→hide→show loop if the query refetches with stale DB state.
+  const dismissedRef = useRef(false);
+  const mountCount   = useRef(0);
+  mountCount.current += 1;
+
   // Check DB state: should we show the modal?
   const query = useQuery({
     queryKey: [QUERY_KEY, userId],
     enabled:  !!userId && !!igAccountId,
     staleTime: Infinity,
     queryFn: async (): Promise<boolean> => {
+      // Respect the session-level dismiss flag
+      if (dismissedRef.current) {
+        console.log('[Referral:prompt] queryFn skipped — dismissed this session');
+        return false;
+      }
+
       const { data, error } = await supabase
         .from('profiles')
         .select('referred_by, referral_source')
         .eq('id', userId!)
         .maybeSingle();
+
+      console.log('[Referral:prompt] queryFn result:', {
+        referred_by: data?.referred_by ?? null,
+        referral_source: data?.referral_source ?? null,
+        error: error?.message ?? null,
+      });
 
       if (error || !data) return false;
 
@@ -96,6 +123,17 @@ export function useReferralPrompt() {
 
       return true;
     },
+  });
+
+  const shouldShow = !dismissedRef.current && query.data === true;
+
+  // Debug logging — fires on every render but is cheap
+  console.log('[Referral:prompt]', {
+    shouldShow,
+    dismissedThisSession: dismissedRef.current,
+    queryData: query.data,
+    mountRender: mountCount.current,
+    userId: userId ?? 'none',
   });
 
   // Auto-apply stashed code from AsyncStorage (pre-signup flow)
@@ -111,20 +149,27 @@ export function useReferralPrompt() {
       const ok = await applyCode(stashed);
       if (ok) {
         // Attribution succeeded — suppress the modal
+        dismissedRef.current = true;
         qc.setQueryData([QUERY_KEY, userId], false);
-        qc.invalidateQueries({ queryKey: [QUERY_KEY, userId] });
         console.log('[Referral] Stashed code applied successfully');
       }
     })();
   }, [userId, igAccountId]);
 
+  // dismiss: hide the modal for the rest of this app session.
+  // Invalidates the Settings profile-referral query so it re-fetches
+  // and shows the manual entry row immediately after skip.
   const dismiss = useCallback(() => {
+    console.log('[Referral:prompt] dismiss() called');
+    dismissedRef.current = true;
     qc.setQueryData([QUERY_KEY, userId], false);
-    qc.invalidateQueries({ queryKey: [QUERY_KEY, userId] });
+    // Force the Settings referral query to re-fetch so it picks up the
+    // new referral_source value (e.g. '__skipped__') without waiting 60 s.
+    qc.invalidateQueries({ queryKey: ['profile-referral', userId] });
   }, [qc, userId]);
 
   return {
-    shouldShow: query.data === true,
+    shouldShow,
     dismiss,
   };
 }

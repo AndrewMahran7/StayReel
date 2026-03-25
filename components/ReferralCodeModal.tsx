@@ -38,11 +38,11 @@ export function ReferralCodeModal({ visible, userId, onDone }: Props) {
   const handleApply = async () => {
     const trimmed = code.trim().toLowerCase();
     if (!trimmed) {
-      setError('Please enter a code.');
+      setError('Please enter a referral code.');
       return;
     }
     if (!/^[a-z0-9_-]{3,30}$/.test(trimmed)) {
-      setError('Code must be 3-30 characters (letters, numbers, - or _).');
+      setError('Codes are 3–30 characters: letters, numbers, hyphens, or underscores only.');
       return;
     }
 
@@ -63,25 +63,52 @@ export function ReferralCodeModal({ visible, userId, onDone }: Props) {
         },
       );
 
-      const json = await res.json();
-
-      if (!res.ok) {
-        throw new Error(json?.message ?? `HTTP ${res.status}`);
+      // Defensive: parse JSON safely — gateway errors may return HTML
+      let json: Record<string, unknown> | null = null;
+      try {
+        json = await res.json();
+      } catch {
+        // Response body was not valid JSON (e.g. 502 HTML page)
       }
 
-      if (json.attributed) {
-        // Tag RevenueCat so revenue can be attributed to this ambassador
+      // Non-2xx without a structured body — treat as server error
+      if (!res.ok && !json?.error) {
+        setError('Something went wrong. Please try again.');
+        return;
+      }
+
+      // ── Handle structured responses ────────────────────────
+      if (json?.success === true) {
         setReferralAttribute(trimmed);
         trackEvent('referral_applied', { code: trimmed, source: 'modal' });
         onDone();
-      } else {
-        // Already attributed — still close
-        onDone();
+        return;
+      }
+
+      // Map known error codes to user-friendly messages
+      const errorCode = json?.error as string | undefined;
+      switch (errorCode) {
+        case 'code_not_found':
+          setError("That code doesn't exist. Check the spelling and try again.");
+          break;
+        case 'code_unavailable':
+          setError('That code is no longer available.');
+          break;
+        case 'already_attributed':
+          // Already has a code — close silently (no disruptive error)
+          onDone();
+          break;
+        case 'server_error':
+          setError('Unable to verify the code right now. Please try again in a moment.');
+          break;
+        default:
+          setError('Something went wrong. Please try again.');
+          break;
       }
     } catch (err: any) {
-      const msg = err?.message ?? String(err);
-      console.warn('[ReferralCode] apply error:', msg);
-      setError(msg);
+      // Network failure, timeout, etc.
+      console.warn('[ReferralCode] apply error:', err?.message ?? err);
+      setError('Could not reach the server. Check your connection and try again.');
     } finally {
       setSaving(false);
     }
@@ -92,15 +119,21 @@ export function ReferralCodeModal({ visible, userId, onDone }: Props) {
     // We store a sentinel value in referral_source to suppress re-prompts
     // without burning the referred_by column.
     try {
-      await supabase
+      const { error: skipErr } = await supabase
         .from('profiles')
         .update({
           referral_source: '__skipped__',
           updated_at:      new Date().toISOString(),
         })
         .eq('id', userId);
-    } catch {
-      // Non-critical — worst case the modal shows once more next launch
+
+      if (skipErr) {
+        console.warn('[ReferralCode] skip write failed:', skipErr.message);
+        // Non-critical — the useReferralPrompt hook's dismissedRef will still
+        // prevent the modal from re-appearing this session.
+      }
+    } catch (e) {
+      console.warn('[ReferralCode] skip error:', e);
     }
     onDone();
   };
@@ -135,13 +168,10 @@ export function ReferralCodeModal({ visible, userId, onDone }: Props) {
             maxLength={30}
             returnKeyType="done"
             onSubmitEditing={handleApply}
-            editable={!saving}
           />
 
-          {/* Error */}
-          {error && (
-            <Text style={s.error}>{error}</Text>
-          )}
+          {/* Error — always rendered so the card height never shifts */}
+          <Text style={s.error}>{error ?? ''}</Text>
 
           {/* Helper text — social motivation */}
           <View style={s.helperRow}>
@@ -232,6 +262,7 @@ const s = StyleSheet.create({
   error: {
     color:    C.red,
     fontSize: 12,
+    minHeight: 16,      // reserved space — prevents layout shift on error show/hide
     marginBottom: 4,
     alignSelf: 'flex-start',
   },

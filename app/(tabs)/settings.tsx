@@ -76,19 +76,49 @@ export default function SettingsScreen() {
     },
   });
 
-  // Referral code — read-only display (or tap to enter if not yet set)
-  const { data: referredBy = null, refetch: refetchReferral } = useQuery<string | null>({
+  // Referral code — read-only display (or tap to enter if already skipped the auto-prompt)
+  const { data: referralData, refetch: refetchReferral } = useQuery<{
+    referredBy: string | null;
+    skipped: boolean;
+  }>({
     queryKey: ['profile-referral', user?.id],
     enabled: !!user,
-    staleTime: 60_000,
+    staleTime: 0,   // always re-fetch so skip state is immediately visible
     queryFn: async () => {
       const { data } = await supabase
         .from('profiles')
-        .select('referred_by')
+        .select('referred_by, referral_source')
         .eq('id', user!.id)
         .maybeSingle();
-      return data?.referred_by ?? null;
+      const result = {
+        referredBy: data?.referred_by ?? null,
+        skipped: data?.referral_source === '__skipped__',
+      };
+      console.log('[Settings:referral] query result:', {
+        currentUserId: user!.id,
+        referred_by: result.referredBy,
+        referral_source: data?.referral_source ?? null,
+        hasReferral: result.referredBy !== null,
+        hasSkippedReferral: result.skipped,
+      });
+      return result;
     },
+  });
+  const referredBy          = referralData?.referredBy ?? null;
+  const hasReferral         = referredBy !== null;
+  const hasSkippedReferral  = referralData?.skipped === true;
+  // Show the manual-entry row only when user has skipped the auto-prompt.
+  // While referralData is loading (undefined) we default to false to avoid flash.
+  const showReferralRow        = hasReferral || hasSkippedReferral;
+  const isSettingsReferralOpen = showReferralModal;
+
+  console.log('[Settings:referral] visibility:', {
+    currentUserId:              user?.id ?? 'none',
+    hasReferral,
+    hasSkippedReferral,
+    shouldShowSettingsReferralEntry: !hasReferral && hasSkippedReferral,
+    isSettingsReferralOpen,
+    showReferralRow,
   });
 
   const toggleNotif = (key: keyof NotificationPrefs) => {
@@ -215,21 +245,23 @@ export default function SettingsScreen() {
           onPress={() => setShowSchoolPicker(true)}
         />
 
-        {referredBy ? (
-          <SettingRow
-            icon="gift-outline"
-            iconColor={C.accent}
-            title="Referral code"
-            value={referredBy}
-          />
-        ) : (
-          <ActionRow
-            icon="gift-outline"
-            iconColor={C.accent}
-            title="Enter referral code"
-            subtitle="Support the creator who sent you"
-            onPress={() => setShowReferralModal(true)}
-          />
+        {showReferralRow && (
+          referredBy ? (
+            <SettingRow
+              icon="gift-outline"
+              iconColor={C.accent}
+              title="Referral code"
+              value={referredBy}
+            />
+          ) : (
+            <ActionRow
+              icon="gift-outline"
+              iconColor={C.accent}
+              title="Enter referral code"
+              subtitle="Support the creator who sent you"
+              onPress={() => setShowReferralModal(true)}
+            />
+          )
         )}
 
         {/* Subscription section */}
