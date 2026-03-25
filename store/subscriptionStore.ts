@@ -13,6 +13,7 @@ import {
   isProFromInfo,
   isRevenueCatConfigured,
   addCustomerInfoListener,
+  syncReferralAttribute,
 } from '@/lib/revenueCat';
 import type { CustomerInfo } from 'react-native-purchases';
 
@@ -73,9 +74,13 @@ export const useSubscriptionStore = create<SubscriptionState>()((set, get) => ({
       // 2. Load profile data from Supabase
       const { data: profile } = await supabase
         .from('profiles')
-        .select('subscription_status, subscription_expires_at, free_snapshots_used, free_snapshot_limit')
+        .select('subscription_status, subscription_expires_at, free_snapshots_used, free_snapshot_limit, referred_by')
         .eq('id', userId)
         .maybeSingle();
+
+      // Sync referral attribution to RevenueCat ($campaign attribute)
+      // so revenue reports can be grouped by ambassador.
+      syncReferralAttribute(profile?.referred_by ?? null);
 
       const dbUsed  = profile?.free_snapshots_used  ?? 0;
       const dbLimit = profile?.free_snapshot_limit   ?? FREE_SNAPSHOT_LIMIT;
@@ -83,14 +88,28 @@ export const useSubscriptionStore = create<SubscriptionState>()((set, get) => ({
       // 3. Check RevenueCat entitlement (source of truth for subscription)
       //    When RC isn't configured, trust the Supabase profile status instead
       //    so the rest of the app still functions.
+      //
+      //    IMPORTANT: This is the only place client-side isPro is determined at
+      //    launch.  The rule is: RC > DB fallback > default false.
+      //    The client must NEVER widen access beyond what the server allows;
+      //    it may only apply a more restrictive fallback.
       let isPro = false;
+      let proSource: 'rc' | 'db-fallback' | 'none' = 'none';
       if (rcReady) {
         isPro = await hasProEntitlement();
+        proSource = isPro ? 'rc' : 'none';
       } else if (profile?.subscription_status === 'active' || profile?.subscription_status === 'trial') {
-        // Fallback: trust the webhook-synced status in the DB
-        isPro = true;
-        console.log('[Subscription] RC not configured — using DB subscription_status as fallback');
+        // Fallback: trust the webhook-synced status in the DB.
+        // Also verify expiry hasn't passed (mirrors server-side check).
+        const expiresAt = profile?.subscription_expires_at;
+        const notExpired = !expiresAt || new Date(expiresAt) > new Date();
+        isPro = notExpired;
+        proSource = isPro ? 'db-fallback' : 'none';
+        if (!notExpired) {
+          console.warn('[Subscription] DB says active/trial but subscription_expires_at is in the past — treating as free');
+        }
       }
+      console.log(`[Subscription] proSource=${proSource} isPro=${isPro} rcReady=${rcReady} dbStatus=${profile?.subscription_status ?? 'null'}`);
 
       // 4. Also read local storage as a fallback for free usage count
       //    (in case the Supabase fetch had stale data on a slow network)

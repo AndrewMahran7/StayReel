@@ -137,10 +137,12 @@ Deno.serve(async (req: Request) => {
       .eq("id", caller.userId)
       .maybeSingle();
 
-    const subActive = profile
-      && ["active", "trial"].includes(profile.subscription_status ?? "")
-      && (!profile.subscription_expires_at || new Date(profile.subscription_expires_at) > new Date());
-    const isFreeUser = !subActive;
+    const dbStatus    = profile?.subscription_status ?? null;
+    const dbExpiresAt = profile?.subscription_expires_at ?? null;
+    const subActive   = profile
+      && ["active", "trial"].includes(dbStatus ?? "")
+      && (!dbExpiresAt || new Date(dbExpiresAt) > new Date());
+    const isFreeUser  = !subActive;
 
     const totalCount = allItems.length;
 
@@ -148,6 +150,9 @@ Deno.serve(async (req: Request) => {
     if (isFreeUser && allItems.length > FREE_PREVIEW_LIMIT) {
       allItems = allItems.slice(0, FREE_PREVIEW_LIMIT);
     }
+
+    // ── Gating diagnostic (always logged — cheap, invaluable for debugging) ──
+    console.log(`[list-users] gating: user=${caller.userId} status=${dbStatus} expires=${dbExpiresAt} subActive=${subActive} isFree=${isFreeUser} total=${totalCount} sent=${allItems.length}`);
 
     // ── Paginate ──────────────────────────────────────────────
     const start    = page * PAGE_SIZE;

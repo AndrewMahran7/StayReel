@@ -63,7 +63,10 @@ function mapStatus(event: RCEvent): string {
     case "BILLING_ISSUE":
       return "expired";          // treat billing issue as expired until resolved
     default:
-      return "active";           // safe fallback
+      // IMPORTANT: unknown event types must NOT silently grant Pro.
+      // Log a warning so we can add explicit handling when RC adds new events.
+      console.warn(`[rc-webhook] Unmapped event type "${type}" — defaulting to "free"`);
+      return "free";
   }
 }
 

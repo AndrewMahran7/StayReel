@@ -12,6 +12,7 @@
 //   paywall_opened          – paywall modal became visible
 //   purchase_completed      – RevenueCat confirmed a purchase
 //   review_prompt_shown     – App Store review dialog was fired
+//   referral_applied        – ambassador referral code attributed
 // ─────────────────────────────────────────────────────────────
 
 import { supabase } from '@/lib/supabase';
@@ -25,7 +26,8 @@ export type FunnelEvent =
   | 'upgrade_cta_clicked'
   | 'paywall_opened'
   | 'purchase_completed'
-  | 'review_prompt_shown';
+  | 'review_prompt_shown'
+  | 'referral_applied';
 
 /**
  * Fire-and-forget: logs a funnel event for the current authenticated user.

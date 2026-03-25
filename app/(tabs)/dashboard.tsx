@@ -27,9 +27,11 @@ import { GrowthChart }                         from '@/components/GrowthChart';
 import { SnapshotErrorCard }                   from '@/components/SnapshotErrorCard';
 import { PaywallModal }                        from '@/components/PaywallModal';
 import { SchoolPickerModal }                   from '@/components/SchoolPickerModal';
+import { ReferralCodeModal }                   from '@/components/ReferralCodeModal';
 import { useAuthStore }                        from '@/store/authStore';
 import { useSubscriptionStore }                from '@/store/subscriptionStore';
 import { useSchoolPrompt }                     from '@/hooks/useSchoolPrompt';
+import { useReferralPrompt }                   from '@/hooks/useReferralPrompt';
 import C                                       from '@/lib/colors';
 import type { ListType }                       from '@/hooks/useListData';
 import { TapTheDotGameModal }                  from '@/components/TapTheDotGameModal';
@@ -94,6 +96,11 @@ export default function DashboardScreen() {
 
   // School attribution prompt (shown once for new users)
   const schoolPrompt = useSchoolPrompt();
+
+  // Referral / ambassador code prompt (shown once, after school prompt)
+  const referralPrompt = useReferralPrompt();
+  // Only show referral modal when school prompt is NOT showing (avoids stacking)
+  const showReferralModal = referralPrompt.shouldShow && !schoolPrompt.shouldShow;
 
   // "Tap the Dot" game modal
   const [gameOpen,       setGameOpen]       = useState(false);
@@ -523,6 +530,13 @@ export default function DashboardScreen() {
         visible={schoolPrompt.shouldShow}
         userId={user?.id ?? ''}
         onDone={schoolPrompt.dismiss}
+      />
+
+      {/* Referral / ambassador code modal – shown once after school prompt */}
+      <ReferralCodeModal
+        visible={showReferralModal}
+        userId={user?.id ?? ''}
+        onDone={referralPrompt.dismiss}
       />
     </SafeAreaView>
   );

@@ -29,6 +29,7 @@ import { unregisterPushToken } from '@/lib/notifications';
 import { showCustomerCenter, restorePurchases, isProFromInfo } from '@/lib/revenueCat';
 import { useNotificationSettings, NotificationPrefs } from '@/hooks/useNotificationSettings';
 import { SchoolPickerModal } from '@/components/SchoolPickerModal';
+import { ReferralCodeModal } from '@/components/ReferralCodeModal';
 import { schoolLabel } from '@/lib/schools';
 import C from '@/lib/colors';
 
@@ -44,6 +45,7 @@ export default function SettingsScreen() {
   const [showRemoveAds, setShowRemoveAds] = useState(false);
   const [showPaywall, setShowPaywall] = useState(false);
   const [showSchoolPicker, setShowSchoolPicker] = useState(false);
+  const [showReferralModal, setShowReferralModal] = useState(false);
   const { settings: notifPrefs, update: updateNotifPref } = useNotificationSettings();
 
   // Subscription
@@ -71,6 +73,21 @@ export default function SettingsScreen() {
         .eq('id', user!.id)
         .maybeSingle();
       return data?.school ?? null;
+    },
+  });
+
+  // Referral code — read-only display (or tap to enter if not yet set)
+  const { data: referredBy = null, refetch: refetchReferral } = useQuery<string | null>({
+    queryKey: ['profile-referral', user?.id],
+    enabled: !!user,
+    staleTime: 60_000,
+    queryFn: async () => {
+      const { data } = await supabase
+        .from('profiles')
+        .select('referred_by')
+        .eq('id', user!.id)
+        .maybeSingle();
+      return data?.referred_by ?? null;
     },
   });
 
@@ -197,6 +214,23 @@ export default function SettingsScreen() {
           subtitle={schoolLabel(schoolId)}
           onPress={() => setShowSchoolPicker(true)}
         />
+
+        {referredBy ? (
+          <SettingRow
+            icon="gift-outline"
+            iconColor={C.accent}
+            title="Referral code"
+            value={referredBy}
+          />
+        ) : (
+          <ActionRow
+            icon="gift-outline"
+            iconColor={C.accent}
+            title="Enter referral code"
+            subtitle="Support the creator who sent you"
+            onPress={() => setShowReferralModal(true)}
+          />
+        )}
 
         {/* Subscription section */}
         <SectionHeader title="Subscription" />
@@ -400,6 +434,14 @@ export default function SettingsScreen() {
         visible={showSchoolPicker}
         userId={user?.id ?? ''}
         onDone={() => setShowSchoolPicker(false)}
+      />
+      <ReferralCodeModal
+        visible={showReferralModal}
+        userId={user?.id ?? ''}
+        onDone={() => {
+          setShowReferralModal(false);
+          refetchReferral();
+        }}
       />
     </SafeAreaView>
   );

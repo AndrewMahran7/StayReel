@@ -58,17 +58,14 @@ async function fetchListPage(
 
   const json = await res.json();
 
-  // ── DEBUG: log raw server response for freemium gating diagnosis ──
-  if (__DEV__) {
-    console.log('[useListData] raw response:', {
-      listType,
-      page,
-      itemCount:  (json.items ?? []).length,
-      total:      json.total,
-      is_limited: json.is_limited,
-      next_page:  json.next_page,
-    });
-  }
+  // ── Gating diagnostic (always logged — visible in Metro & release logs) ──
+  console.log('[useListData] response:', {
+    listType,
+    page,
+    itemCount:  (json.items ?? []).length,
+    total:      json.total,
+    is_limited: json.is_limited,
+  });
 
   return {
     items:     json.items      ?? [],

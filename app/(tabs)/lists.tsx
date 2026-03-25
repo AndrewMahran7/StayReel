@@ -105,22 +105,30 @@ export default function ListsScreen() {
   const serverLimited  = firstPage?.isLimited ?? false;
 
   // ── Client-side safety net ────────────────────────────────────
-  // If the server says "not limited" but the local subscription store
-  // knows the user is free, enforce the limit client-side.  This
-  // handles stale DB subscription_status or un-deployed Edge Functions.
+  // Rule: the client must NEVER widen access beyond what the server allows.
+  // It may only apply a MORE RESTRICTIVE fallback if it detects inconsistency.
+  //
+  // Case 1 (normal):  server says is_limited → trust it, show locked rows.
+  // Case 2 (stale DB): server says NOT limited but client isPro=false
+  //                     → clamp to FREE_PREVIEW_LIMIT client-side.
+  // Case 3 (pro user): both server and client agree → show all items.
   const FREE_PREVIEW_LIMIT = 10;
   const clientOverride = !isPro && !serverLimited && totalCount > FREE_PREVIEW_LIMIT;
   const isLimited      = serverLimited || clientOverride;
 
-  // When the client overrides, only show the first N items
-  const visibleItems = clientOverride ? items.slice(0, FREE_PREVIEW_LIMIT) : items;
+  // Clamp visible items for free users regardless of how many the server sent.
+  // This covers both clientOverride AND a hypothetical bug where the server
+  // sends >10 items but still sets is_limited=true (belt-and-suspenders).
+  const needsClamp   = !isPro && items.length > FREE_PREVIEW_LIMIT;
+  const visibleItems = (clientOverride || needsClamp) ? items.slice(0, FREE_PREVIEW_LIMIT) : items;
 
-  // ── DEBUG: gating state ───────────────────────────────────────
-  if (__DEV__ && firstPage) {
+  // ── Gating diagnostic (always logged — visible in Metro & release logs) ──
+  if (firstPage) {
     console.log('[Lists] gating:', {
       isPro,
       serverLimited,
       clientOverride,
+      needsClamp,
       isLimited,
       totalCount,
       itemsReceived: items.length,

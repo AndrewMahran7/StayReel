@@ -140,6 +140,39 @@ export async function configureRevenueCat(userId: string): Promise<boolean> {
   }
 }
 
+// ── Referral / Ambassador attribution ──────────────────────────
+
+/**
+ * Tag the RevenueCat customer with an ambassador referral code.
+ * Uses the reserved `$campaign` subscriber attribute so the code
+ * appears in RC dashboard charts and webhook payloads.
+ *
+ * Safe to call multiple times — RC deduplicates identical values.
+ * No-ops when RC isn't configured (Android / Simulator).
+ */
+export function setReferralAttribute(code: string): void {
+  if (!_configured) {
+    console.log('[RevenueCat] Not configured — skipping setReferralAttribute');
+    return;
+  }
+  try {
+    Purchases.setAttributes({ '$campaign': code });
+    console.log('[RevenueCat] Set $campaign attribute:', code);
+  } catch (err: any) {
+    console.warn('[RevenueCat] setAttributes error:', err?.message ?? err);
+  }
+}
+
+/**
+ * Sync the referral attribute on app startup.
+ * Called from subscriptionStore.hydrate() which already has the profile data.
+ * Pass the `referred_by` value directly to avoid supabase import in this module.
+ */
+export function syncReferralAttribute(referredBy: string | null): void {
+  if (!_configured || !referredBy) return;
+  setReferralAttribute(referredBy);
+}
+
 // ── Customer info ──────────────────────────────────────────────
 
 /**

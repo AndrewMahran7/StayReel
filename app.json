@@ -2,8 +2,8 @@
   "expo": {
     "name": "StayReel",
     "slug": "stayreel",
-    "version": "1.3.1",
-    "runtimeVersion": "1.3.1",
+    "version": "1.4.0",
+    "runtimeVersion": "1.4.0",
     "updates": {
       "url": "https://u.expo.dev/7a24a73a-5ba3-4aeb-866e-c285fb07327a",
       "enabled": true,
@@ -22,7 +22,7 @@
     "ios": {
       "supportsTablet": false,
       "bundleIdentifier": "com.stayreel.ios",
-      "buildNumber": "2",
+      "buildNumber": "3",
       "infoPlist": {
         "NSAppTransportSecurity": {
           "NSAllowsArbitraryLoads": false
