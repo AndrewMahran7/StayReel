@@ -22,6 +22,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { supabase } from '@/lib/supabase';
 import { setReferralAttribute } from '@/lib/revenueCat';
 import { trackEvent } from '@/lib/analytics';
+import { fetchWithTimeout } from '@/lib/fetchWithTimeout';
 import C from '@/lib/colors';
 
 interface Props {
@@ -50,7 +51,7 @@ export function ReferralCodeModal({ visible, userId, onDone }: Props) {
     setError(null);
     try {
       const { data: { session } } = await supabase.auth.getSession();
-      const res = await fetch(
+      const res = await fetchWithTimeout(
         `${process.env.EXPO_PUBLIC_SUPABASE_URL}/functions/v1/set-referral`,
         {
           method: 'POST',

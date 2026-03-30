@@ -18,6 +18,7 @@ import { Ionicons } from '@expo/vector-icons';
 
 import { useDashboard }                                          from '@/hooks/useDashboard';
 import { useSnapshotCapture, SnapshotLimitError } from '@/hooks/useSnapshotCapture';
+import { useNetwork }                            from '@/hooks/useNetwork';
 import { DashboardCard }                       from '@/components/DashboardCard';
 import { BannerAdView }                        from '@/components/BannerAdView';
 import { StatsRow }                            from '@/components/StatsRow';
@@ -82,6 +83,7 @@ export default function DashboardScreen() {
   const router                                 = useRouter();
   const { data, isLoading, refetch, error } = useDashboard();
   const capture                                = useSnapshotCapture();
+  const { isOffline }                          = useNetwork();
   const [capturing, setCapturing]              = useState(false);
   const [manualRefreshing, setManualRefreshing] = useState(false);
   const setPendingListType                     = useAuthStore((s) => s.setPendingListType);
@@ -240,10 +242,21 @@ export default function DashboardScreen() {
             refreshing={manualRefreshing}
             onRefresh={handleRefresh}
             tintColor={C.accent}
+            enabled={!isOffline}
           />
         }
       >
         {/* â”€â”€ Header â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
+        {/* Offline banner */}
+        {isOffline && data && (
+          <View style={styles.offlineBanner}>
+            <Ionicons name="cloud-offline-outline" size={16} color={C.amber} />
+            <Text style={styles.offlineBannerText}>
+              You're offline. Showing your last snapshot.
+            </Text>
+          </View>
+        )}
+
         <View style={styles.header}>
           <View style={styles.headerLeft}>
             <Text style={styles.greeting}>Dashboard</Text>
@@ -262,10 +275,10 @@ export default function DashboardScreen() {
           <TouchableOpacity
             style={[
               styles.captureBtn,
-              (capturing || isLimited) && styles.captureBtnDisabled,
+              (capturing || isLimited || isOffline) && styles.captureBtnDisabled,
             ]}
             onPress={handleCapture}
-            disabled={capturing || capture.isPending || isLimited}
+            disabled={capturing || capture.isPending || isLimited || isOffline}
           >
             {capturing || capture.isPending ? (
               <>
@@ -504,12 +517,24 @@ export default function DashboardScreen() {
         {/* â”€â”€ Empty state â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
         {!data && !isLoading && (
           <View style={styles.emptyState}>
-            <Ionicons name="analytics-outline" size={48} color={C.textMuted} />
-            <Text style={styles.emptyTitle}>No data yet</Text>
+            <Ionicons
+              name={isOffline ? 'cloud-offline-outline' : 'analytics-outline'}
+              size={48}
+              color={C.textMuted}
+            />
+            <Text style={styles.emptyTitle}>
+              {isOffline ? 'No saved data' : 'No data yet'}
+            </Text>
             <Text style={styles.emptyBody}>
-              Tap{' '}
-              <Text style={styles.emptyBold}>Take Snapshot</Text>
-              {' '}to capture your first snapshot and start tracking your growth.
+              {isOffline
+                ? 'Connect to the internet to fetch your first snapshot.'
+                : (
+                  <>
+                    Tap{' '}
+                    <Text style={styles.emptyBold}>Take Snapshot</Text>
+                    {' '}to capture your first snapshot and start tracking your growth.
+                  </>
+                )}
             </Text>
           </View>
         )}
@@ -778,6 +803,21 @@ const styles = StyleSheet.create({
     maxWidth:   260,
   },
   emptyBold: { color: C.textPrimary, fontWeight: '600' },
+
+  offlineBanner: {
+    flexDirection:   'row',
+    alignItems:      'center',
+    gap:             8,
+    backgroundColor: C.amberDim,
+    borderRadius:    10,
+    padding:         10,
+    marginBottom:    12,
+  },
+  offlineBannerText: {
+    color:    C.amber,
+    fontSize: 13,
+    flex:     1,
+  },
 
   upgradeCta: {
     flexDirection:    'row',

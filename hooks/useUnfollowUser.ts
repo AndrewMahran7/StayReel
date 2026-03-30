@@ -5,6 +5,7 @@
 import { useState, useCallback } from 'react';
 import { useMutation }           from '@tanstack/react-query';
 import { supabase }              from '@/lib/supabase';
+import { fetchWithTimeout }      from '@/lib/fetchWithTimeout';
 
 interface UnfollowVars {
   igAccountId: string;
@@ -14,7 +15,7 @@ interface UnfollowVars {
 async function callUnfollow(vars: UnfollowVars): Promise<void> {
   const { data: { session } } = await supabase.auth.getSession();
 
-  const res = await fetch(
+  const res = await fetchWithTimeout(
     `${process.env.EXPO_PUBLIC_SUPABASE_URL}/functions/v1/unfollow-user`,
     {
       method: 'POST',

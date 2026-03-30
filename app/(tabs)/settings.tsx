@@ -42,6 +42,7 @@ export default function SettingsScreen() {
 
   const [disconnecting, setDisconnecting] = useState(false);
   const [deleting,      setDeleting]      = useState(false);
+  const [restoring,    setRestoring]      = useState(false);
   const [showRemoveAds, setShowRemoveAds] = useState(false);
   const [showPaywall, setShowPaywall] = useState(false);
   const [showSchoolPicker, setShowSchoolPicker] = useState(false);
@@ -299,7 +300,10 @@ export default function SettingsScreen() {
             iconColor={C.textSecondary}
             title="Restore Purchases"
             subtitle="Already subscribed on another device?"
+            loading={restoring}
             onPress={async () => {
+              if (restoring) return;
+              setRestoring(true);
               try {
                 const info = await restorePurchases();
                 if (isProFromInfo(info)) {
@@ -310,6 +314,8 @@ export default function SettingsScreen() {
                 }
               } catch (e: any) {
                 Alert.alert('Error', e?.message ?? 'Restore failed.');
+              } finally {
+                setRestoring(false);
               }
             }}
           />

@@ -17,6 +17,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/store/authStore';
 import { useSubscriptionStore } from '@/store/subscriptionStore';
+import { fetchWithTimeout } from '@/lib/fetchWithTimeout';
 import C from '@/lib/colors';
 
 function isLoginPage(url: string) {
@@ -95,7 +96,7 @@ export default function ConnectInstagramScreen() {
       }
       if (!token) throw new Error('Not signed in. Please go back and sign in first.');
 
-      const res = await fetch(
+      const res = await fetchWithTimeout(
         `${process.env.EXPO_PUBLIC_SUPABASE_URL}/functions/v1/connect-instagram`,
         {
           method:  'POST',
@@ -105,6 +106,7 @@ export default function ConnectInstagramScreen() {
             apikey:         process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY!,
           },
           body: JSON.stringify({ session_cookie: sessionCookie }),
+          timeoutMs: 30_000, // 30s — this call can be slow
         },
       );
 

@@ -1,7 +1,7 @@
 # Privacy Policy
 
 **StayReel**
-**Effective Date: February 21, 2026**
+**Effective Date: March 25, 2026**
 
 ---
 
@@ -20,23 +20,27 @@ StayReel is an independent application and is **not affiliated with, endorsed by
 ### 2.1 Account Information
 - **Email address** — collected when you create a StayReel account, used for authentication.
 
-### 2.2 Instagram Account Data
+### 2.2 Subscription Information
+- **Subscription status and entitlement data** — such as whether you are on Free, Trial, Pro, monthly, yearly, or lifetime access.
+- **Purchase-related metadata** — such as product identifiers, renewal status, expiration dates, and transaction status information provided by Apple, Google, and RevenueCat. StayReel does **not** receive your full payment card details.
+
+### 2.3 Instagram Account Data
 - **Instagram username** — used to identify your connected account within the App.
 - **Instagram session token** — provided directly by you (never your password). This token is used solely to retrieve your follower and following lists on your behalf. It is encrypted at rest and never shared with third parties.
 
-### 2.3 Snapshot Data
+### 2.4 Snapshot Data
 - **Follower and following usernames** — captured once per 24-hour period at your request. This data is used to compute changes over time (new followers, lost followers, mutual follows).
 
-### 2.4 Derived Metrics
+### 2.5 Derived Metrics
 - Follower and following counts, mutual follow counts, net change values, weekly summaries, and growth streak data — computed from your snapshot data.
 
-### 2.5 Usage Data
+### 2.6 Usage Data
 - Basic technical information such as app version, device type, and error logs may be collected for diagnostic and improvement purposes. We do not collect precise location data.
 
 ### What We Do NOT Collect
 - Instagram passwords (ever, under any circumstances)
 - Direct Messages, post content, story data, or any Instagram engagement data
-- Payment information directly (payment processing, if introduced, will be handled by a third-party provider such as Apple's App Store)
+- Full payment card information directly (subscription billing is handled by Apple App Store and/or Google Play, with subscription infrastructure provided through RevenueCat)
 
 ---
 
@@ -45,12 +49,13 @@ StayReel is an independent application and is **not affiliated with, endorsed by
 We use the information we collect to:
 
 - Authenticate you and maintain your account
+- Process and manage subscriptions, purchases, renewals, restorations, and entitlements
 - Capture and store Instagram follower snapshots at your direction
 - Compute and display follower trends, weekly summaries, and growth streaks
 - Improve and debug the App
 - Send service-related communications (such as account or security notices)
 
-We do not sell your personal information. We do not use your data for advertising profiling beyond what is disclosed in Section 5.
+We do not sell your personal information. We do not use your data for advertising profiling. StayReel does not currently serve third-party advertisements.
 
 ---
 
@@ -70,10 +75,10 @@ While we take reasonable precautions, no system is completely secure. We cannot 
 StayReel uses the following third-party services which may process your data as described in their respective privacy policies:
 
 - **Supabase** (supabase.com) — database, authentication, and backend infrastructure
-- **Apple App Store / Google Play** — distribution platform; subject to Apple's and Google's privacy policies
-- **Ad Networks (future)** — if advertising is introduced, we will update this policy to identify the network(s) and describe what data, if any, is shared
+- **RevenueCat** (revenuecat.com) — subscription management, entitlement status, and purchase restoration infrastructure
+- **Apple App Store / Google Play** — app distribution, billing, and subscription processing; subject to Apple's and Google's privacy policies
 
-We do not share your Instagram session token, follower data, or derived metrics with any third party for their own commercial purposes.
+We do not share your Instagram session token, follower data, or derived metrics with any third party for their own independent advertising or commercial profiling purposes.
 
 ---
 

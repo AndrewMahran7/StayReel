@@ -1,9 +1,13 @@
 ﻿// hooks/useDashboard.ts
 // Fetches the latest diff summary for the connected IG account.
+// Persists the latest result locally so it can be shown when offline.
 
-import { useQuery } from '@tanstack/react-query';
+import { useEffect, useRef } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/store/authStore';
+import { saveSnapshot, loadSnapshot } from '@/lib/offlineStorage';
+import { fetchWithTimeout } from '@/lib/fetchWithTimeout';
 
 export interface DiffSummary {
   // Diff identification
@@ -56,7 +60,7 @@ async function fetchDashboard(igAccountId: string): Promise<DiffSummary | null> 
     session = data.session;
   }
 
-  const res = await fetch(
+  const res = await fetchWithTimeout(
     `${process.env.EXPO_PUBLIC_SUPABASE_URL}/functions/v1/diffs-latest?ig_account_id=${igAccountId}`,
     {
       headers: {
@@ -77,12 +81,41 @@ async function fetchDashboard(igAccountId: string): Promise<DiffSummary | null> 
 
 export function useDashboard() {
   const igAccountId = useAuthStore((s) => s.igAccountId);
+  const qc = useQueryClient();
+  const seeded = useRef(false);
 
-  return useQuery<DiffSummary | null, Error>({
+  // On mount, seed the query cache from local storage so the user sees
+  // data instantly (before any network call).  Runs once per mount.
+  useEffect(() => {
+    if (!igAccountId || seeded.current) return;
+    seeded.current = true;
+
+    loadSnapshot().then((stored) => {
+      if (!stored) return;
+      // Only seed if the cache is currently empty (i.e. first load).
+      const existing = qc.getQueryData(['dashboard', igAccountId]);
+      if (!existing) {
+        qc.setQueryData(['dashboard', igAccountId], stored.data);
+      }
+    });
+  }, [igAccountId]);
+
+  const query = useQuery<DiffSummary | null, Error>({
     queryKey:  ['dashboard', igAccountId],
     queryFn:   () => fetchDashboard(igAccountId!),
     enabled:   !!igAccountId,
     staleTime: 60_000,
   });
+
+  // Persist every successful fetch to local storage.
+  const lastSaved = useRef<string | null>(null);
+  useEffect(() => {
+    if (query.data && query.data.to_captured_at !== lastSaved.current) {
+      lastSaved.current = query.data.to_captured_at;
+      saveSnapshot(query.data);
+    }
+  }, [query.data]);
+
+  return query;
 }
 

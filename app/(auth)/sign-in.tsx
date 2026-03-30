@@ -36,12 +36,17 @@ export default function SignInScreen() {
 
   const handleDevLogin = async () => {
     setLoading(true);
-    const { error } = await supabase.auth.signInWithPassword({
-      email:    DEV_EMAIL!,
-      password: DEV_PASSWORD!,
-    });
-    setLoading(false);
-    if (error) Alert.alert('Dev login failed', error.message);
+    try {
+      const { error } = await supabase.auth.signInWithPassword({
+        email:    DEV_EMAIL!,
+        password: DEV_PASSWORD!,
+      });
+      if (error) Alert.alert('Dev login failed', error.message);
+    } catch (e: any) {
+      Alert.alert('Sign-in error', e?.message ?? 'Something went wrong. Please try again.');
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handleSend = async () => {
@@ -60,31 +65,41 @@ export default function SignInScreen() {
         return;
       }
       setLoading(true);
-      const { error } = await supabase.auth.signInWithPassword({
-        email:    DEV_EMAIL,
-        password: password,
-      });
-      setLoading(false);
-      if (error) Alert.alert('Sign in failed', error.message);
+      try {
+        const { error } = await supabase.auth.signInWithPassword({
+          email:    DEV_EMAIL,
+          password: password,
+        });
+        if (error) Alert.alert('Sign in failed', error.message);
+      } catch (e: any) {
+        Alert.alert('Sign-in error', e?.message ?? 'Something went wrong. Please try again.');
+      } finally {
+        setLoading(false);
+      }
       return;
     }
     // ──────────────────────────────────────────────────────────
 
     setLoading(true);
-    // Linking.createURL returns exp://host/--/auth in Expo Go
-    // and stayreel://auth in a native build.
-    const redirectTo = Linking.createURL('auth');
-    const { error } = await supabase.auth.signInWithOtp({
-      email: trimmed,
-      options: { emailRedirectTo: redirectTo },
-    });
-    setLoading(false);
+    try {
+      // Linking.createURL returns exp://host/--/auth in Expo Go
+      // and stayreel://auth in a native build.
+      const redirectTo = Linking.createURL('auth');
+      const { error } = await supabase.auth.signInWithOtp({
+        email: trimmed,
+        options: { emailRedirectTo: redirectTo },
+      });
 
-    if (error) {
-      Alert.alert('Error', error.message);
-      return;
+      if (error) {
+        Alert.alert('Error', error.message);
+        return;
+      }
+      setSent(true);
+    } catch (e: any) {
+      Alert.alert('Error', e?.message ?? 'Something went wrong. Please try again.');
+    } finally {
+      setLoading(false);
     }
-    setSent(true);
   };
 
   return (

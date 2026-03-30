@@ -4,6 +4,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/store/authStore';
+import { fetchWithTimeout } from '@/lib/fetchWithTimeout';
 
 export interface SnapshotPoint {
   captured_at:    string;
@@ -14,7 +15,7 @@ export interface SnapshotPoint {
 
 async function fetchHistory(igAccountId: string, days: number): Promise<SnapshotPoint[]> {
   const { data: { session } } = await supabase.auth.getSession();
-  const res = await fetch(
+  const res = await fetchWithTimeout(
     `${process.env.EXPO_PUBLIC_SUPABASE_URL}/functions/v1/snapshot-history?ig_account_id=${igAccountId}&days=${days}`,
     {
       headers: {

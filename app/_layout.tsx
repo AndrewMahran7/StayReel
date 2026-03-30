@@ -14,6 +14,7 @@ import { queryClient } from '@/lib/queryClient';
 import { useAuthStore } from '@/store/authStore';
 import { useAdStore } from '@/store/adStore';
 import { useSubscriptionStore } from '@/store/subscriptionStore';
+import { clearSnapshot } from '@/lib/offlineStorage';
 import { useNotifications } from '@/hooks/useNotifications';
 
 function AuthGuard() {
@@ -162,6 +163,7 @@ export default function RootLayout() {
         if (!session) {
           setIgAccountId(null);
           resetSub();
+          clearSnapshot(); // Wipe cached snapshot on sign-out
         } else if (
           event === 'SIGNED_IN' ||
           event === 'TOKEN_REFRESHED' ||
@@ -177,8 +179,9 @@ export default function RootLayout() {
           } else {
             // Re-fetch igAccountId so AuthGuard doesn't redirect a freshly
             // signed-in user to /connect-instagram when they already have an
-            // account linked.
-            const { data } = await supabase
+            // account linked.  Timeout after 10s so a hung Supabase query
+            // doesn't leave the user stuck on the wrong screen.
+            const queryPromise = supabase
               .from('ig_accounts')
               .select('id')
               .eq('user_id', session.user.id)
@@ -186,7 +189,17 @@ export default function RootLayout() {
               .eq('status', 'active')
               .limit(1)
               .maybeSingle();
-            setIgAccountId(data?.id ?? null);
+
+            const result = await Promise.race([
+              queryPromise,
+              new Promise<{ data: null }>((resolve) =>
+                setTimeout(() => {
+                  console.warn('[Auth] ig_accounts query timed out (10s)');
+                  resolve({ data: null });
+                }, 10_000),
+              ),
+            ]);
+            setIgAccountId(result.data?.id ?? null);
           }
 
           // Ensure subscription state is loaded (covers warm magic-link sign-in)

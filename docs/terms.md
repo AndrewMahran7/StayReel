@@ -1,7 +1,7 @@
 # Terms of Service
 
 **StayReel**
-**Effective Date: February 21, 2026**
+**Effective Date: March 25, 2026**
 
 ---
 
@@ -83,16 +83,18 @@ We do not guarantee that the App will be available at all times, free of errors,
 
 ---
 
-## 11. Subscriptions (Future)
+## 11. Subscriptions and Purchases
 
-StayReel may in the future offer optional paid subscription plans. If and when introduced:
+StayReel currently offers optional paid purchases, which may include auto-renewing subscriptions and non-consumable lifetime access.
 
-- Subscription pricing and billing periods will be clearly disclosed before purchase
-- Subscriptions will be managed through the Apple App Store or Google Play
-- Cancellation policies will follow the rules of the respective app store
-- No refunds will be issued except as required by applicable law or app store policy
+By purchasing a subscription or other paid product through StayReel, you agree that:
 
-Any such plans will be subject to updated Terms provided at the time of introduction.
+- Pricing, billing periods, trial terms, and product details will be disclosed to you before purchase
+- Payments are processed by Apple App Store or Google Play, not directly by StayReel
+- Auto-renewing subscriptions renew automatically unless cancelled through your app store account settings before the renewal date
+- You are responsible for managing or cancelling your subscription through the Apple App Store or Google Play, as applicable
+- Refunds, billing disputes, and payment issues are governed by the policies of the app store through which you made the purchase, except where otherwise required by applicable law
+- Access to paid features may be suspended, changed, or discontinued if your subscription expires, is cancelled, is refunded, or is otherwise revoked by the platform or payment provider
 
 ---
 
@@ -104,12 +106,13 @@ All content, design, code, and materials in the App are owned by or licensed to 
 
 ## 13. Limitation of Liability
 
-To the maximum extent permitted by law:
+To the fullest extent permitted by applicable law:
 
 - StayReel is provided "as is" and "as available" without warranties of any kind, express or implied
 - We are not liable for any indirect, incidental, special, consequential, or punitive damages arising from your use of the App
 - We are not responsible for any action taken by Instagram or Meta against your account as a result of using the App
-- Our total liability to you for any claim arising from these Terms or your use of the App shall not exceed the amount you paid us in the 12 months preceding the claim (if any)
+- We disclaim liability for loss of data, loss of profits, loss of business, interruption of service, device issues, account restrictions, or other losses arising out of or related to your use of the App
+- If a court of competent jurisdiction determines that any liability cannot be fully disclaimed, then our liability will be limited to the minimum amount permitted by applicable law
 
 ---
 

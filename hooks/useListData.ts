@@ -6,6 +6,7 @@
 import { useInfiniteQuery } from '@tanstack/react-query';
 import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/store/authStore';
+import { fetchWithTimeout } from '@/lib/fetchWithTimeout';
 
 export type ListType =
   | 'new_followers'
@@ -41,7 +42,7 @@ async function fetchListPage(
     ...(search.trim() ? { search: search.trim() } : {}),
   });
 
-  const res = await fetch(
+  const res = await fetchWithTimeout(
     `${process.env.EXPO_PUBLIC_SUPABASE_URL}/functions/v1/list-users?${params}`,
     {
       headers: {
