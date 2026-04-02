@@ -159,6 +159,16 @@ export interface ChunkResult {
   isFirstSnapshot: boolean;
   /** True when snapshot-start found an existing running job and returned it. */
   resumed: boolean;
+  /**
+   * Count of confirmed "doesn't follow back" users found so far.
+   * Only meaningful during the following phase (0 at all other phases).
+   * Derived in-memory — no schema change required.
+   */
+  partialNotFollowingBackCount: number;
+  /** First few confirmed "doesn't follow back" users for live preview (following phase only). */
+  partialNotFollowingBackPreview: Array<{ig_id: string; username: string}>;
+  /** True once the followers phase is fully complete and the following scan has begun. */
+  partialResultsReady: boolean;
 }
 
 // ── Main worker ────────────────────────────────────────────────────────────
@@ -278,7 +288,10 @@ export async function runSnapshotChunk(
         // Not enough time — defer to next invocation
         console.log(`[job ${job.id}] following deferred (${rem}ms remaining)`);
         const eta = computeEtaMs(job.started_at, pagesDone, followers.length, job.follower_count_api, job.following_count_api, job.is_first_snapshot, followingWillBeCached, "following");
-        return mk("running", "following", pagesDone, followers.length, following.length, false, "Fetching following list…", false, eta);
+        // Followers are complete; compute confirmed partial NFB from whatever following we have.
+        const nfb = computePartialNfb(followers, following);
+        const base = mk("running", "following", pagesDone, followers.length, following.length, false, "Fetching following list\u2026", false, eta);
+        return { ...base, partialNotFollowingBackCount: nfb.count, partialNotFollowingBackPreview: nfb.preview, partialResultsReady: true };
       }
 
       const { cursor: actualFollowingCursor, rankToken: savedFollowingRankToken } = parseCursorField(followingCursor);
@@ -322,7 +335,10 @@ export async function runSnapshotChunk(
       } else {
         console.log(`[job ${job.id}] following chunk done: ${following.length} so far.`);
         const eta = computeEtaMs(job.started_at, pagesDone, followers.length, job.follower_count_api, job.following_count_api, job.is_first_snapshot, followingWillBeCached, "following");
-        return mk("running", "following", pagesDone, followers.length, following.length, false, "Fetching following list…", false, eta);
+        // Emit confirmed partial NFB from everything fetched so far.
+        const nfb = computePartialNfb(followers, following);
+        const base = mk("running", "following", pagesDone, followers.length, following.length, false, "Fetching following list\u2026", false, eta);
+        return { ...base, partialNotFollowingBackCount: nfb.count, partialNotFollowingBackPreview: nfb.preview, partialResultsReady: true };
       }
     }
   }
@@ -552,6 +568,28 @@ async function failJob(db: any, jobId: string, error: string, startedAt?: string
   }).eq("id", jobId);
 }
 
+/**
+ * Derive confirmed "doesn't follow back" entries from the accumulated lists.
+ * Only call once the followers phase is fully complete.
+ * Building the Set is O(followers) ≈ <1 ms even at 5 000 entries.
+ */
+function computePartialNfb(
+  followers: IgEdge[],
+  following: IgEdge[],
+  maxPreview = 5,
+): { count: number; preview: Array<{ig_id: string; username: string}> } {
+  const followersSet = new Set(
+    followers.map((e) => e.ig_id ? e.ig_id : `@${e.username.toLowerCase()}`),
+  );
+  const nfb = following.filter(
+    (e) => !followersSet.has(e.ig_id ? e.ig_id : `@${e.username.toLowerCase()}`),
+  );
+  return {
+    count:   nfb.length,
+    preview: nfb.slice(0, maxPreview).map((e) => ({ ig_id: e.ig_id ?? "", username: e.username })),
+  };
+}
+
 function makeResult(
   jobId: string,
   status: "running" | "complete" | "failed",
@@ -568,5 +606,5 @@ function makeResult(
   etaMs: number | null = null,
   resumed = false,
 ): ChunkResult {
-  return { jobId, status, phase, pagesDone, followersSeen, followingSeen, followerCountApi, followingCountApi, done, message, followingCached, isFirstSnapshot, etaMs, resumed };
+  return { jobId, status, phase, pagesDone, followersSeen, followingSeen, followerCountApi, followingCountApi, done, message, followingCached, isFirstSnapshot, etaMs, resumed, partialNotFollowingBackCount: 0, partialNotFollowingBackPreview: [], partialResultsReady: false };
 }

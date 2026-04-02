@@ -17,7 +17,7 @@ import { useFocusEffect, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 
 import { useDashboard }                                          from '@/hooks/useDashboard';
-import { useSnapshotCapture, SnapshotLimitError } from '@/hooks/useSnapshotCapture';
+import { useSnapshotCapture, SnapshotLimitError, SnapshotError } from '@/hooks/useSnapshotCapture';
 import { useNetwork }                            from '@/hooks/useNetwork';
 import { DashboardCard }                       from '@/components/DashboardCard';
 import { BannerAdView }                        from '@/components/BannerAdView';
@@ -77,6 +77,15 @@ const CARDS: {
   { key: 'you_dont_follow_back', title: "You don't follow back",  icon: 'arrow-forward-circle', iconColor: C.teal,   bgColor: C.tealDim   },
   { key: 'you_unfollowed',       title: 'You unfollowed',         icon: 'close-circle',          iconColor: C.accent, bgColor: C.accentDim },
 ];
+
+/** Snapshot error codes that require Instagram reconnection before retrying. */
+const RECONNECT_CODES = new Set([
+  'CHALLENGE_REQUIRED',
+  'CHECKPOINT_REQUIRED',
+  'IG_CHALLENGE_REQUIRED',
+  'SESSION_EXPIRED',
+  'IG_SESSION_INVALID',
+]);
 
 // â”€â”€ Screen â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 export default function DashboardScreen() {
@@ -156,6 +165,9 @@ export default function DashboardScreen() {
     return { step: 4, label: 'Building', headline: 'Building your report\u2026', subtitle: 'Almost there\u2026', pct: 0.95 };
   })();
 
+  // When the last error requires reconnection, gate the snapshot button.
+  const needsReconnect = capture.error instanceof SnapshotError && RECONNECT_CODES.has(capture.error.code);
+
   // Clear override once the server confirms it's gone
   useEffect(() => {
     if (data?.next_snapshot_allowed_at === null) setOverrideNextAt(null);
@@ -202,8 +214,8 @@ export default function DashboardScreen() {
 
     await new Promise<void>((resolve) =>
       Alert.alert(
-        'This takes a few minutes ⏳',
-        "We fetch your followers slowly on purpose — it keeps your Instagram account safe.\n\nWhile you wait, play Tap the Dot! We genuinely appreciate your patience. 🙏",
+        'This takes a few minutes',
+        "We fetch your followers slowly on purpose — it keeps your Instagram account safe.\n\nNote: Instagram may occasionally ask you to re-verify your account during or after a snapshot. This is normal and doesn't mean anything is wrong.\n\nWhile you wait, play Tap the Dot! 🙏",
         [{ text: 'Got it, let\'s go!', onPress: () => resolve() }],
         { cancelable: false },
       )
@@ -299,15 +311,20 @@ export default function DashboardScreen() {
           <TouchableOpacity
             style={[
               styles.captureBtn,
-              (capturing || isLimited || isOffline) && styles.captureBtnDisabled,
+              (capturing || isLimited || isOffline || needsReconnect) && styles.captureBtnDisabled,
             ]}
             onPress={handleCapture}
-            disabled={capturing || capture.isPending || isLimited || isOffline}
+            disabled={capturing || capture.isPending || isLimited || isOffline || needsReconnect}
           >
             {capturing || capture.isPending ? (
               <>
                 <ActivityIndicator size="small" color="#fff" />
                 <Text style={styles.captureBtnText}>{stage.label}\u2026</Text>
+              </>
+            ) : needsReconnect ? (
+              <>
+                <Ionicons name="shield-outline" size={16} color="#fff" />
+                <Text style={styles.captureBtnText}>Reconnect Required</Text>
               </>
             ) : isLimited ? (
               <>
@@ -325,7 +342,9 @@ export default function DashboardScreen() {
 
         {/* Safety info text */}
         <Text style={styles.infoText}>
-          {isLimited && data?.cooldown_reason === 'daily_cap'
+          {needsReconnect
+            ? 'Reconnect your Instagram account to take another snapshot.'
+            : isLimited && data?.cooldown_reason === 'daily_cap'
             ? `Daily limit reached (${data?.snapshots_today ?? 3} of 3 today). Resets in ${countdown}.`
             : isLimited
             ? `Next snapshot available in ${countdown}.`
@@ -342,7 +361,7 @@ export default function DashboardScreen() {
                 {capture.progress.resumed
                   ? 'Resuming your snapshot from where it paused. '
                   : 'Scanning slowly to protect your Instagram account. '}
-                You can switch apps — your progress is saved.
+                You can switch apps — your progress is saved. Instagram may occasionally ask you to re-verify; this is normal.
               </Text>
             </View>
 
@@ -393,6 +412,29 @@ export default function DashboardScreen() {
             <View style={styles.progressBarBg}>
               <View style={[styles.progressBarFill, { width: `${Math.round(stage.pct * 100)}%` }]} />
             </View>
+
+            {/* Live confirmed "doesn't follow back" count — only visible once
+                followers phase is fully done and following scan has begun.
+                Stays hidden during followers phase — no speculative results. */}
+            {capture.progress.partialResultsReady && !capture.progress.queued && (
+              <View style={styles.partialNfbRow}>
+                <Ionicons
+                  name="person-outline"
+                  size={15}
+                  color={C.accent}
+                  style={{ marginRight: 8 }}
+                />
+                <Text style={styles.partialNfbText}>
+                  {capture.progress.partialNotFollowingBackCount > 0
+                    ? `Found ${capture.progress.partialNotFollowingBackCount} ${
+                        capture.progress.partialNotFollowingBackCount === 1 ? 'person' : 'people'
+                      } who ${
+                        capture.progress.partialNotFollowingBackCount === 1 ? "doesn\u2019t" : "don\u2019t"
+                      } follow you back so far`
+                    : 'Scanning who doesn\u2019t follow you back\u2026'}
+                </Text>
+              </View>
+            )}
 
             {/* cached following note */}
             {capture.progress.followingCached && (
@@ -869,6 +911,25 @@ const styles = StyleSheet.create({
     fontSize:   12,
     marginTop:  2,
     lineHeight: 17,
+  },
+
+  // Live partial "doesn't follow back" counter shown during following phase
+  partialNfbRow: {
+    flexDirection:    'row',
+    alignItems:       'center',
+    marginHorizontal: 12,
+    marginTop:        6,
+    marginBottom:     2,
+    paddingVertical:   9,
+    paddingHorizontal: 12,
+    backgroundColor:  C.accentDim,
+    borderRadius:     8,
+  },
+  partialNfbText: {
+    color:      C.accentLight,
+    fontSize:   13,
+    flex:       1,
+    lineHeight: 18,
   },
 });
 

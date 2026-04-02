@@ -41,6 +41,12 @@ export interface JobProgress {
   queued:           boolean;
   /** Server-provided message for queued state, e.g. "Waiting for an available slot…". */
   queueMessage:     string | null;
+  /** Count of confirmed "doesn't follow back" users found so far (0 during followers phase). */
+  partialNotFollowingBackCount: number;
+  /** First few confirmed "doesn't follow back" users for live preview. */
+  partialNotFollowingBackPreview: Array<{ig_id: string; username: string}>;
+  /** True once followers phase is complete and following scan is active. */
+  partialResultsReady: boolean;
 }
 
 export class SnapshotLimitError extends Error {
@@ -136,6 +142,12 @@ interface ChunkResponse {
   isFirstSnapshot?: boolean;
   /** True when the server returned an already-running job (app resumed mid-scan). */
   resumed?:         boolean;
+  /** Count of confirmed "doesn't follow back" users found so far (following phase only). */
+  partialNotFollowingBackCount?: number;
+  /** First few confirmed "doesn't follow back" users for live preview. */
+  partialNotFollowingBackPreview?: Array<{ig_id: string; username: string}>;
+  /** True once followers phase is complete and following scan is active. */
+  partialResultsReady?: boolean;
 }
 
 /** Fetch with an AbortController timeout so a hung edge function
@@ -228,7 +240,8 @@ export function useSnapshotCapture() {
   const [error,       setError]       = useState<Error | null>(null);
   const [progress,    setProgress]    = useState<JobProgress>({
     phase: null, pagesDone: 0, followersSeen: 0, followingSeen: 0, followingCached: false,
-    followerCountApi: 0, etaLabel: null, resumed: false,
+    followerCountApi: 0, etaLabel: null, resumed: false, queued: false, queueMessage: null,
+    partialNotFollowingBackCount: 0, partialNotFollowingBackPreview: [], partialResultsReady: false,
   });
 
   // Clear any stale error whenever the account changes (sign-out / sign-in
@@ -252,7 +265,7 @@ export function useSnapshotCapture() {
     cancelled.current = false;
     setIsPending(true);
     setError(null);
-    setProgress({ phase: null, pagesDone: 0, followersSeen: 0, followingSeen: 0, followingCached: false, followerCountApi: 0, etaLabel: null, resumed: false, queued: false, queueMessage: null });
+    setProgress({ phase: null, pagesDone: 0, followersSeen: 0, followingSeen: 0, followingCached: false, followerCountApi: 0, etaLabel: null, resumed: false, queued: false, queueMessage: null, partialNotFollowingBackCount: 0, partialNotFollowingBackPreview: [], partialResultsReady: false });
 
     // Suppress the server-sent "snapshot ready" foreground push while
     // the user is watching the live progress bar.
@@ -277,6 +290,9 @@ export function useSnapshotCapture() {
         resumed:         wasResumed,
         queued:          first.status === 'queued',
         queueMessage:    first.status === 'queued' ? (first.message ?? 'Waiting for an available slot…') : null,
+        partialNotFollowingBackCount:   first.partialNotFollowingBackCount   ?? 0,
+        partialNotFollowingBackPreview: first.partialNotFollowingBackPreview ?? [],
+        partialResultsReady:            first.partialResultsReady            ?? false,
       });
 
       if (first.done) {
@@ -307,6 +323,9 @@ export function useSnapshotCapture() {
             resumed:         wasResumed,
             queued:          current.status === 'queued',
             queueMessage:    current.status === 'queued' ? (current.message ?? 'Waiting for an available slot…') : null,
+            partialNotFollowingBackCount:   current.partialNotFollowingBackCount   ?? 0,
+            partialNotFollowingBackPreview: current.partialNotFollowingBackPreview ?? [],
+            partialResultsReady:            current.partialResultsReady            ?? false,
           });
         } catch (pollErr) {
           retries++;
@@ -399,6 +418,8 @@ function finalise(chunk: ChunkResponse): CaptureResult {
 function inferCodeFromMessage(msg: string): string {
   const m = msg.toUpperCase();
   if (m.includes('SESSION_EXPIRED') || m.includes('SESSION EXPIRED') || m.includes('IG_SESSION_INVALID')) return 'SESSION_EXPIRED';
+  // Check IG_CHALLENGE_REQUIRED before CHALLENGE_REQUIRED to avoid false match
+  if (m.includes('IG_CHALLENGE_REQUIRED')) return 'IG_CHALLENGE_REQUIRED';
   if (m.includes('CHALLENGE_REQUIRED') || m.includes('CHECKPOINT_REQUIRED')) return 'CHALLENGE_REQUIRED';
   if (m.includes('IG_RATE_LIMITED') || m.includes('RATE') || m.includes('THROTTL')) return 'IG_RATE_LIMITED';
   if (m.includes('SUSPICIOUS')) return 'SUSPICIOUS_RESPONSE';
