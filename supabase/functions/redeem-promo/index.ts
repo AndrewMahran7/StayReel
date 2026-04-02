@@ -58,15 +58,19 @@ Deno.serve(async (req: Request) => {
 
     if (fetchErr) throw fetchErr;
     if (!promo) {
+      console.warn(`[redeem-promo] ✗ user=${caller.userId} code="${rawCode}" reason=code_not_found`);
       return jsonResponse({ error: "code_not_found", message: "Promo code not found." }, 404);
     }
     if (!promo.is_active) {
+      console.warn(`[redeem-promo] ✗ user=${caller.userId} code="${rawCode}" reason=code_inactive`);
       return jsonResponse({ error: "code_inactive", message: "This promo code is no longer active." }, 410);
     }
     if (new Date(promo.grants_until) <= new Date()) {
+      console.warn(`[redeem-promo] ✗ user=${caller.userId} code="${rawCode}" reason=code_expired`);
       return jsonResponse({ error: "code_expired", message: "This promo code has expired." }, 410);
     }
     if (promo.max_redemptions !== null && promo.times_redeemed >= promo.max_redemptions) {
+      console.warn(`[redeem-promo] ✗ user=${caller.userId} code="${rawCode}" reason=code_exhausted used=${promo.times_redeemed}/${promo.max_redemptions}`);
       return jsonResponse({ error: "code_exhausted", message: "This promo code has been fully redeemed." }, 410);
     }
 
@@ -79,6 +83,7 @@ Deno.serve(async (req: Request) => {
       .maybeSingle();
 
     if (existing) {
+      console.warn(`[redeem-promo] ✗ user=${caller.userId} code="${rawCode}" reason=already_redeemed`);
       return jsonResponse({ error: "already_redeemed", message: "You've already redeemed this code." }, 409);
     }
 
@@ -95,6 +100,7 @@ Deno.serve(async (req: Request) => {
       !profile.promo_until; // exclude promo-granted "active" status
 
     if (realSubActive) {
+      console.warn(`[redeem-promo] ✗ user=${caller.userId} code="${rawCode}" reason=already_pro`);
       return jsonResponse({
         error: "already_pro",
         message: "You already have an active subscription!",

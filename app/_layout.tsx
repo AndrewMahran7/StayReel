@@ -22,7 +22,13 @@ function AuthGuard() {
   // Cast to string[] — Expo Router types segments as a tuple based on
   // the route tree, but at the root layout we need runtime depth-2 access.
   const segments   = useSegments() as string[];
-  const { session, initialised, igAccountId } = useAuthStore();
+  const {
+    session,
+    initialised,
+    igAccountId,
+    pendingNotificationRoute,
+    setPendingNotificationRoute,
+  } = useAuthStore();
 
   useEffect(() => {
     if (!initialised) return;
@@ -39,15 +45,28 @@ function AuthGuard() {
         router.replace('/(auth)/connect-instagram');
       }
     } else {
-      if (!inTabs && !inModal) router.replace('/(tabs)/dashboard');
+      // User is fully signed in with an IG account — route to tabs.
+      if (!inTabs && !inModal) {
+        // If a notification queued a route during cold start, consume it.
+        if (pendingNotificationRoute) {
+          const route = pendingNotificationRoute;
+          setPendingNotificationRoute(null);
+          console.log('[AuthGuard] Consuming pending notification route:', route);
+          // Invalidate dashboard so the data is fresh on arrival
+          queryClient.invalidateQueries({ queryKey: ['dashboard'] });
+          router.replace(route as any);
+        } else {
+          router.replace('/(tabs)/dashboard');
+        }
+      }
     }
-  }, [session, initialised, igAccountId, segments]);
+  }, [session, initialised, igAccountId, segments, pendingNotificationRoute]);
 
   return null;
 }
 
 export default function RootLayout() {
-  const { setSession, setInitialised, setIgAccountId } = useAuthStore();
+  const { setSession, setInitialised, setIgAccountId, setTermsAccepted } = useAuthStore();
   const { hydrate: hydrateAds } = useAdStore();
   const hydrateSub = useSubscriptionStore((s) => s.hydrate);
   const resetSub   = useSubscriptionStore((s) => s.reset);
@@ -139,6 +158,14 @@ export default function RootLayout() {
             .limit(1)
             .maybeSingle();
           if (data?.id) setIgAccountId(data.id);
+
+          // Hydrate terms acceptance status
+          const { data: profile } = await supabase
+            .from('profiles')
+            .select('terms_accepted_at')
+            .eq('id', session.user.id)
+            .maybeSingle();
+          if (profile?.terms_accepted_at) setTermsAccepted(true);
 
           // Hydrate subscription state (RevenueCat + Supabase profile)
           hydrateSub(session.user.id).catch((err: Error) =>

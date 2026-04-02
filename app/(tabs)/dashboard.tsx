@@ -153,12 +153,16 @@ export default function DashboardScreen() {
         ? `${p.followersSeen.toLocaleString()} of ~${p.followerCountApi.toLocaleString()} followers`
         : `${p.followersSeen.toLocaleString()} followers so far`;
       const pct = p.followerCountApi > 0 ? Math.min(0.55, (p.followersSeen / p.followerCountApi) * 0.55) : 0.15;
-      const subtitle = p.etaLabel ? `${detail} \u00b7 ${p.etaLabel}` : detail;
+      const subtitle = p.isFirstSnapshot
+        ? `${detail} \u00b7 First snapshots take a bit longer`
+        : p.etaLabel ? `${detail} \u00b7 ${p.etaLabel}` : detail;
       return { step: 2, label: 'Scanning',  headline: 'Scanning your followers\u2026',  subtitle, pct: Math.max(0.05, pct) };
     }
     if (p.phase === 'following') {
       const detail = p.followingCached ? 'Using cached following list \u2713' : `${p.followingSeen.toLocaleString()} following so far`;
-      const subtitle = p.etaLabel ? `${detail} \u00b7 ${p.etaLabel}` : detail;
+      const subtitle = p.isFirstSnapshot
+        ? `${detail} \u00b7 First snapshots take a bit longer`
+        : p.etaLabel ? `${detail} \u00b7 ${p.etaLabel}` : detail;
       return { step: 3, label: 'Comparing', headline: 'Comparing relationships\u2026', subtitle, pct: p.followingCached ? 0.85 : 0.65 };
     }
     // finalize

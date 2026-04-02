@@ -58,56 +58,80 @@ const MAX_PAGES_PER_INVOCATION = 45;
 const ADVANCE_THRESHOLD_MS    = 15_000;
 
 // ── ETA estimation ────────────────────────────────────────────────────────────
+
+/**
+ * Fetch the last few completed non-first-snapshot durations for an IG account.
+ * Used as the historical baseline for ETA estimation.
+ */
+async function fetchHistoricalDurations(
+  // deno-lint-ignore no-explicit-any
+  db: any,
+  igAccountId: string,
+): Promise<number[]> {
+  const { data } = await db
+    .from("snapshot_jobs")
+    .select("total_duration_ms")
+    .eq("ig_account_id", igAccountId)
+    .eq("status", "complete")
+    .eq("is_first_snapshot", false)
+    .not("total_duration_ms", "is", null)
+    .order("completed_at", { ascending: false })
+    .limit(3);
+
+  if (!data) return [];
+  return data
+    .map((r: { total_duration_ms: number | null }) => r.total_duration_ms)
+    .filter((d: number | null): d is number => d !== null && d > 0);
+}
+
 /**
  * Returns estimated remaining milliseconds for a running snapshot job.
  *
- * Formula:
- *   msPerPage   = elapsedMs / pagesDone         (actual timing, or conservative default)
- *   avgEdges    = followersSeen / pagesDone
- *   pagesLeft   = ceil((followerCountApi - followersSeen) / avgEdges)  (followers remaining)
- *               + ceil(followingCountApi / avgEdges)  (skipped when following is cached)
- *   etaMs       = pagesLeft × msPerPage
- *
- * Returns null when pagesDone < 2 (not enough real data for a reliable estimate).
- * Returns 0 during the finalize phase ("finishing up").
+ * Strategy:
+ *   1. First snapshots → always null (no reliable baseline exists).
+ *   2. Non-first snapshots → use the median of prior completed (non-first)
+ *      snapshot durations for this account, plus a 10 % conservative buffer.
+ *      ETA = bufferedMedian − elapsed.  Suppressed when exceeded.
+ *   3. No historical data → null (show no ETA rather than a bad guess).
+ *   4. Finalize phase → 0 ("Finishing up").
  */
 function computeEtaMs(
-  startedAt:             string | null,
-  pagesDone:             number,
-  followersSeen:         number,
-  followerCountApi:      number,
-  followingCountApi:     number,
-  isFirstSnapshot:       boolean,
-  followingWillBeCached: boolean,
-  phase:                 string,
+  startedAt:            string | null,
+  isFirstSnapshot:      boolean,
+  phase:                string,
+  historicalDurations:  number[],
 ): number | null {
+  // First snapshot: always suppress — there is no trustworthy baseline.
+  if (isFirstSnapshot) return null;
+
+  // Finalize phase: we are genuinely finishing.
   if (phase === "finalize") return 0;
-  if (pagesDone < 2) return null; // too little data for a reliable estimate
 
-  const startMs   = startedAt ? new Date(startedAt).getTime() : null;
-  const elapsedMs = startMs ? Date.now() - startMs : null;
+  // Need started_at for elapsed calculation.
+  if (!startedAt) return null;
 
-  // ms/page: prefer actual wall-clock ratio when available.
-  // Fallbacks: normal mode ≈ 13.5 s (midpoint of 10–15 s range + overhead);
-  // ultra-safe (first snapshot) ≈ 21.5 s (midpoint of 18–25 s range).
-  const msPerPage = (elapsedMs && pagesDone > 0)
-    ? elapsedMs / pagesDone
-    : (isFirstSnapshot ? 21_500 : 13_500);
+  // No historical data: suppress rather than guess.
+  if (historicalDurations.length === 0) return null;
 
-  const avgEdgesPerPage = Math.max(1, followersSeen / pagesDone);
+  // Median of historical durations.
+  const sorted = [...historicalDurations].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  const median = sorted.length % 2 === 0
+    ? Math.round((sorted[mid - 1] + sorted[mid]) / 2)
+    : sorted[mid];
 
-  let pagesLeft = 0;
-  if (phase === "followers") {
-    const followersLeft = Math.max(0, (followerCountApi || followersSeen) - followersSeen);
-    pagesLeft += Math.ceil(followersLeft / avgEdgesPerPage);
-    if (!followingWillBeCached) {
-      pagesLeft += Math.ceil((followingCountApi || avgEdgesPerPage * 3) / avgEdgesPerPage);
-    }
-  } else if (phase === "following" && !followingWillBeCached) {
-    pagesLeft += Math.ceil((followingCountApi || avgEdgesPerPage * 3) / avgEdgesPerPage);
-  }
+  // Add a 10 % conservative buffer so the estimate errs on the slow side.
+  const expected = Math.round(median * 1.1);
 
-  return Math.round(pagesLeft * msPerPage);
+  const elapsed   = Date.now() - new Date(startedAt).getTime();
+  const remaining = expected - elapsed;
+
+  // If we have exceeded the buffered historical estimate, suppress
+  // rather than show a misleading number.  The phase detail and
+  // progress bar still give the user useful feedback.
+  if (remaining <= 0) return null;
+
+  return remaining;
 }
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -188,6 +212,9 @@ export async function runSnapshotChunk(
   const invocationStart = Date.now();
   const db = adminClient();
 
+  // Historical durations for ETA estimation — queried once per invocation.
+  const historicalDurations = await fetchHistoricalDurations(db, job.ig_account_id);
+
   // Telemetry: track pages and edges at the start of this invocation for structured logging.
   const pagesAtStart = job.pages_done;
   // Whether the following list will be served from cache — pre-filled following_json
@@ -265,7 +292,7 @@ export async function runSnapshotChunk(
       console.log(`[job ${job.id}] followers complete (${followers.length} edges). Advancing to following.`);
     } else {
       console.log(`[job ${job.id}] followers chunk done: ${followers.length} so far, cursor saved.`);
-      const eta = computeEtaMs(job.started_at, pagesDone, followers.length, job.follower_count_api, job.following_count_api, job.is_first_snapshot, followingWillBeCached, "followers");
+      const eta = computeEtaMs(job.started_at, job.is_first_snapshot, "followers", historicalDurations);
       return mk("running", "followers", pagesDone, followers.length, following.length, false, `Fetched ${followers.length} followers so far…`, false, eta);
     }
   }
@@ -287,7 +314,7 @@ export async function runSnapshotChunk(
       if (rem < ADVANCE_THRESHOLD_MS) {
         // Not enough time — defer to next invocation
         console.log(`[job ${job.id}] following deferred (${rem}ms remaining)`);
-        const eta = computeEtaMs(job.started_at, pagesDone, followers.length, job.follower_count_api, job.following_count_api, job.is_first_snapshot, followingWillBeCached, "following");
+        const eta = computeEtaMs(job.started_at, job.is_first_snapshot, "following", historicalDurations);
         // Followers are complete; compute confirmed partial NFB from whatever following we have.
         const nfb = computePartialNfb(followers, following);
         const base = mk("running", "following", pagesDone, followers.length, following.length, false, "Fetching following list\u2026", false, eta);
@@ -334,7 +361,7 @@ export async function runSnapshotChunk(
         console.log(`[job ${job.id}] following complete (${following.length} edges). Advancing to finalize.`);
       } else {
         console.log(`[job ${job.id}] following chunk done: ${following.length} so far.`);
-        const eta = computeEtaMs(job.started_at, pagesDone, followers.length, job.follower_count_api, job.following_count_api, job.is_first_snapshot, followingWillBeCached, "following");
+        const eta = computeEtaMs(job.started_at, job.is_first_snapshot, "following", historicalDurations);
         // Emit confirmed partial NFB from everything fetched so far.
         const nfb = computePartialNfb(followers, following);
         const base = mk("running", "following", pagesDone, followers.length, following.length, false, "Fetching following list\u2026", false, eta);

@@ -33,8 +33,10 @@ export interface JobProgress {
   followingSeen:    number;
   followingCached:  boolean;
   followerCountApi: number;
-  /** User-facing ETA string, e.g. "About 4 minutes remaining". Null until reliable. */
+  /** User-facing ETA string, e.g. "About 5 minutes remaining". Null until reliable. */
   etaLabel:         string | null;
+  /** True when this is the account's first-ever snapshot (no ETA shown). */
+  isFirstSnapshot:  boolean;
   /** True when server returned an existing running job rather than starting fresh. */
   resumed:          boolean;
   /** True when the job is queued waiting for a concurrency slot. */
@@ -240,7 +242,7 @@ export function useSnapshotCapture() {
   const [error,       setError]       = useState<Error | null>(null);
   const [progress,    setProgress]    = useState<JobProgress>({
     phase: null, pagesDone: 0, followersSeen: 0, followingSeen: 0, followingCached: false,
-    followerCountApi: 0, etaLabel: null, resumed: false, queued: false, queueMessage: null,
+    followerCountApi: 0, etaLabel: null, isFirstSnapshot: false, resumed: false, queued: false, queueMessage: null,
     partialNotFollowingBackCount: 0, partialNotFollowingBackPreview: [], partialResultsReady: false,
   });
 
@@ -265,7 +267,7 @@ export function useSnapshotCapture() {
     cancelled.current = false;
     setIsPending(true);
     setError(null);
-    setProgress({ phase: null, pagesDone: 0, followersSeen: 0, followingSeen: 0, followingCached: false, followerCountApi: 0, etaLabel: null, resumed: false, queued: false, queueMessage: null, partialNotFollowingBackCount: 0, partialNotFollowingBackPreview: [], partialResultsReady: false });
+    setProgress({ phase: null, pagesDone: 0, followersSeen: 0, followingSeen: 0, followingCached: false, followerCountApi: 0, etaLabel: null, isFirstSnapshot: false, resumed: false, queued: false, queueMessage: null, partialNotFollowingBackCount: 0, partialNotFollowingBackPreview: [], partialResultsReady: false });
 
     // Suppress the server-sent "snapshot ready" foreground push while
     // the user is watching the live progress bar.
@@ -287,6 +289,7 @@ export function useSnapshotCapture() {
         followingCached: runFollowingCached,
         followerCountApi: first.followerCountApi ?? 0,
         etaLabel:        computeEtaLabel(first.etaMs),
+        isFirstSnapshot: first.isFirstSnapshot ?? false,
         resumed:         wasResumed,
         queued:          first.status === 'queued',
         queueMessage:    first.status === 'queued' ? (first.message ?? 'Waiting for an available slot…') : null,
@@ -320,6 +323,7 @@ export function useSnapshotCapture() {
             followingCached: runFollowingCached,
             followerCountApi: current.followerCountApi ?? 0,
             etaLabel:        computeEtaLabel(current.etaMs),
+            isFirstSnapshot: current.isFirstSnapshot ?? false,
             resumed:         wasResumed,
             queued:          current.status === 'queued',
             queueMessage:    current.status === 'queued' ? (current.message ?? 'Waiting for an available slot…') : null,
@@ -393,19 +397,31 @@ function delay(ms: number) { return new Promise((r) => setTimeout(r, ms)); }
 /**
  * Converts a backend etaMs value to a short user-facing string.
  *
- * Thresholds are deliberately coarse so the copy feels honest:
- *   ≤ 0 ms        → "Finishing up…"
- *   < 45 s        → "Less than a minute remaining"
- *   45 s – 90 s   → "About a minute remaining"
- *   ≥ 90 s        → "About N minutes remaining"
+ * Design principles:
+ *   • First-snapshot ETA is always null from the backend, so this
+ *     never needs to handle isFirstSnapshot.
+ *   • Broad buckets prevent the label from jumping every poll cycle.
+ *   • “Finishing up” only appears in the last ~90 s of a run.
+ *   • null / negative → suppress (estimate exceeded or unavailable).
+ *
+ * Thresholds:
+ *   null / undefined   → null (no ETA shown)
+ *   < 0                → null (exceeded historical estimate, suppress)
+ *   0 – 90 s           → “Finishing up…”
+ *   90 s – 3 min        → “A couple of minutes remaining”
+ *   3 – 5 min           → “A few minutes remaining”
+ *   ≥ 5 min             → “About N minutes remaining” (rounded to nearest 5)
  */
 export function computeEtaLabel(etaMs: number | null | undefined): string | null {
-  if (etaMs == null) return null;
-  if (etaMs <= 0)    return 'Finishing up…';
-  if (etaMs < 45_000) return 'Less than a minute remaining';
-  if (etaMs < 90_000) return 'About a minute remaining';
-  const mins = Math.round(etaMs / 60_000);
-  return `About ${mins} minute${mins !== 1 ? 's' : ''} remaining`;
+  if (etaMs == null)     return null;
+  if (etaMs < 0)         return null;            // exceeded estimate — suppress
+  if (etaMs < 90_000)    return 'Finishing up\u2026';
+  if (etaMs < 180_000)   return 'A couple of minutes remaining';
+  if (etaMs < 300_000)   return 'A few minutes remaining';
+  // Round to nearest 5-minute increment for stability.
+  const mins    = Math.max(5, Math.round(etaMs / 60_000));
+  const snapped = Math.round(mins / 5) * 5 || 5;  // minimum 5
+  return `About ${snapped} minutes remaining`;
 }
 function finalise(chunk: ChunkResponse): CaptureResult {
   return {

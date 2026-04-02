@@ -88,6 +88,7 @@ Deno.serve(async (req: Request) => {
           done:             false,
           message:          "Waiting for an available slot\u2026",
           etaMs:            null,
+          isFirstSnapshot:  job.is_first_snapshot,
         });
       }
       const promoted = await tryPromoteQueuedJob(db, job.id);
@@ -101,6 +102,7 @@ Deno.serve(async (req: Request) => {
           done:    false,
           message: "Starting\u2026",
           etaMs:   null,
+          isFirstSnapshot: job.is_first_snapshot,
         });
       }
       // Promotion succeeded — refresh the local job object to status=running.

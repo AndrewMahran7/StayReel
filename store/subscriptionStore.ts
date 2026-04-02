@@ -23,6 +23,27 @@ import type { CustomerInfo } from 'react-native-purchases';
 const FREE_SNAPSHOT_LIMIT = 999;
 const LOCAL_KEY = '@stayreel:free_snapshots_used';
 
+/** Maps backend promo error codes to user-friendly messages. */
+function promoErrorMessage(code: string): string {
+  switch (code) {
+    case 'code_not_found':
+    case 'code_expired':
+    case 'code_inactive':
+    case 'code_exhausted':
+      return 'That code is invalid or expired.';
+    case 'already_redeemed':
+      return "You've already redeemed this code.";
+    case 'already_pro':
+      return 'You already have an active subscription!';
+    case 'BAD_REQUEST':
+      return 'Please enter a valid promo code.';
+    case 'UNAUTHORIZED':
+      return 'Please sign in and try again.';
+    default:
+      return 'Something went wrong. Please try again.';
+  }
+}
+
 // ── Types ──────────────────────────────────────────────────────
 export type SubStatus = 'free' | 'trial' | 'active' | 'expired' | 'cancelled';
 
@@ -226,21 +247,48 @@ export const useSubscriptionStore = create<SubscriptionState>()((set, get) => ({
   async redeemPromo(code: string) {
     try {
       const { data: { session } } = await supabase.auth.getSession();
-      if (!session) return { ok: false, message: 'Not signed in.' };
+      if (!session) return { ok: false, message: 'Please sign in and try again.' };
 
-      const res = await supabase.functions.invoke('redeem-promo', {
-        body: { code },
+      // Use raw fetch instead of supabase.functions.invoke so we always
+      // receive the structured JSON body — the SDK wraps non-2xx responses
+      // in a generic error, hiding the real error code and message.
+      const url = `${process.env.EXPO_PUBLIC_SUPABASE_URL}/functions/v1/redeem-promo`;
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${session.access_token}`,
+          apikey: process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY!,
+        },
+        body: JSON.stringify({ code }),
       });
 
-      if (res.error) {
-        const msg = res.error.message ?? 'Unknown error';
-        return { ok: false, message: msg };
+      let body: Record<string, any>;
+      try {
+        const text = await res.text();
+        body = JSON.parse(text);
+      } catch {
+        console.warn('[redeemPromo] Failed to parse response body, status:', res.status);
+        // If the edge function isn't deployed or returns HTML, this catches it.
+        return { ok: false, message: 'Something went wrong. Please try again later.' };
       }
 
-      const body = res.data as { ok?: boolean; error?: string; message?: string; grants_until?: string };
-
-      if (body.error) {
-        return { ok: false, message: body.message ?? body.error };
+      // Structured error from our edge function
+      if (!res.ok || body.error) {
+        const errorCode = body.error ?? 'UNKNOWN';
+        // Catch generic Supabase gateway errors (e.g. "Edge Function returned
+        // a non-2xx status code") that slip through when the SDK response shape
+        // doesn't match our edge function's format.
+        const isSdkWrapped =
+          typeof body.message === 'string' &&
+          body.message.includes('Edge Function') &&
+          !body.error;
+        if (isSdkWrapped) {
+          console.warn(`[redeemPromo] SDK-wrapped error, status=${res.status}`);
+          return { ok: false, message: 'Something went wrong. Please try again later.' };
+        }
+        console.warn(`[redeemPromo] code="${code}" errorCode=${errorCode} status=${res.status}`);
+        return { ok: false, message: promoErrorMessage(errorCode) };
       }
 
       // Success — update store immediately
@@ -257,7 +305,8 @@ export const useSubscriptionStore = create<SubscriptionState>()((set, get) => ({
         grantsUntil: body.grants_until,
       };
     } catch (e: any) {
-      return { ok: false, message: e?.message ?? 'Failed to redeem code.' };
+      console.warn('[redeemPromo] Unexpected error:', e?.message);
+      return { ok: false, message: 'Something went wrong. Please try again.' };
     }
   },
 

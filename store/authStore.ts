@@ -11,10 +11,19 @@ interface AuthState {
   initialised:     boolean;
   igAccountId:     string | null;   // set after /connect-instagram succeeds
   pendingListType: string | null;   // set by Dashboard card tap to force-select list tab
+  
+  /** Route queued by a notification tap that arrived before auth was ready. */
+  pendingNotificationRoute: string | null;
+
+  /** Whether the user has accepted the current Terms of Service version. */
+  termsAccepted:  boolean;
+
   setSession:      (session: Session | null) => void;
   setInitialised:  () => void;
   setIgAccountId:  (id: string | null) => void;
   setPendingListType: (type: string | null) => void;
+  setPendingNotificationRoute: (route: string | null) => void;
+  setTermsAccepted: (accepted: boolean) => void;
 }
 
 export const useAuthStore = create<AuthState>()((set) => ({
@@ -23,6 +32,8 @@ export const useAuthStore = create<AuthState>()((set) => ({
   initialised:     false,
   igAccountId:     null,
   pendingListType: null,
+  pendingNotificationRoute: null,
+  termsAccepted:   false,
 
   setSession: (session) =>
     set({ session, user: session?.user ?? null }),
@@ -35,4 +46,10 @@ export const useAuthStore = create<AuthState>()((set) => ({
 
   setPendingListType: (type) =>
     set({ pendingListType: type }),
+
+  setPendingNotificationRoute: (route) =>
+    set({ pendingNotificationRoute: route }),
+
+  setTermsAccepted: (accepted) =>
+    set({ termsAccepted: accepted }),
 }));

@@ -42,6 +42,19 @@ Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return corsPreflightResponse();
   if (req.method !== "POST") return jsonResponse({ error: "Method not allowed" }, 405);
 
+  // ── TEMPORARILY DISABLED ────────────────────────────────────
+  // The unfollow feature directly mutates Instagram state and
+  // carries risk of triggering session restrictions, challenges,
+  // or rate limits. Disabled until a safer implementation is ready.
+  return jsonResponse(
+    {
+      error: "FEATURE_DISABLED",
+      message: "Unfollow is temporarily unavailable while we improve account safety.",
+    },
+    503,
+  );
+
+  /* eslint-disable no-unreachable */
   try {
     // ── 1. Auth ───────────────────────────────────────────────
     const caller = await requireAuth(req);

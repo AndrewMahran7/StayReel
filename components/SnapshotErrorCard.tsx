@@ -6,7 +6,6 @@
 import React from 'react';
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
 import C from '@/lib/colors';
 import { SnapshotError } from '@/hooks/useSnapshotCapture';
 import { supabase } from '@/lib/supabase';
@@ -21,7 +20,7 @@ interface ErrorProfile {
   title:   string;
   body:    string;
   steps:   string[];
-  /** If true, show a "Go to Settings → Reconnect" button */
+  /** If true, show a "Reconnect Instagram" button */
   needsReconnect: boolean;
   /** If true, show a Sign Out button */
   needsSignOut: boolean;
@@ -82,12 +81,12 @@ const PROFILES: Record<string, ErrorProfile> = {
     color:   '#f5a623',
     bgColor: '#1a1008',
     title:   'Instagram needs you to verify',
-    body:    'Instagram flagged unusual activity on your account and requires identity verification.',
+    body:    'Instagram flagged unusual activity on your account. This is a routine security check — nothing to worry about.',
     steps: [
       'Open the Instagram app on your phone.',
-      'You should see an alert — tap it and complete the verification (email / SMS / photo).',
-      'Once verified, return to StayReel → Settings → Reconnect Instagram.',
-      'Log back in and tap Connect.',
+      'Complete the verification (email, SMS, or selfie).',
+      'Come back to StayReel and tap "Reconnect Instagram" below.',
+      'Log in and tap Connect — you\'re all set!',
     ],
     needsReconnect: true,
     needsSignOut:   false,
@@ -97,13 +96,13 @@ const PROFILES: Record<string, ErrorProfile> = {
     icon:    'shield-outline',
     color:   '#f5a623',
     bgColor: '#1a1008',
-    title:   'Instagram account checkpoint',
-    body:    'Instagram has temporarily restricted access to your account and requires you to pass a checkpoint.',
+    title:   'Instagram security checkpoint',
+    body:    'Instagram wants to confirm this is really you. This is normal and usually only takes a minute.',
     steps: [
-      'Open the native Instagram app.',
-      'Follow the checkpoint instructions (usually an email or phone verification).',
-      'After completing it, wait 15–30 minutes.',
-      'Then go to StayReel Settings → Reconnect Instagram.',
+      'Open the Instagram app and follow the checkpoint instructions.',
+      'Wait 15–30 minutes after completing it.',
+      'Come back to StayReel and tap "Reconnect Instagram" below.',
+      'Log in and tap Connect — you\'re all set!',
     ],
     needsReconnect: true,
     needsSignOut:   false,
@@ -114,11 +113,11 @@ const PROFILES: Record<string, ErrorProfile> = {
     color:   '#f5a623',
     bgColor: '#1a1008',
     title:   'Instagram verification required',
-    body:    'Instagram is asking to confirm this is really you.',
+    body:    'Instagram is asking to confirm this is really you. This is a routine security check.',
     steps: [
       'Open the Instagram app and complete the security check.',
-      'Go to StayReel Settings → Reconnect Instagram.',
-      'Log in and connect your account again.',
+      'Come back to StayReel and tap "Reconnect Instagram" below.',
+      'Log in and tap Connect — you\'re all set!',
     ],
     needsReconnect: true,
     needsSignOut:   false,
@@ -175,7 +174,6 @@ interface Props {
 }
 
 export function SnapshotErrorCard({ error, onDismiss }: Props) {
-  const router     = useRouter();
   const setSession = useAuthStore((s) => s.setSession);
   const setIgAccountId = useAuthStore((s) => s.setIgAccountId);
   if (!error) return null;
@@ -223,15 +221,16 @@ export function SnapshotErrorCard({ error, onDismiss }: Props) {
           </View>
         )}
 
-        {/* Reconnect CTA */}
+        {/* Reconnect CTA — clears local igAccountId so AuthGuard
+            redirects straight to the connect-instagram flow. */}
         {profile.needsReconnect && (
           <TouchableOpacity
             style={[styles.reconnectBtn, { backgroundColor: profile.color }]}
-            onPress={() => router.push('/(tabs)/settings')}
+            onPress={() => setIgAccountId(null)}
             activeOpacity={0.85}
           >
             <Ionicons name="logo-instagram" size={15} color="#fff" style={{ marginRight: 6 }} />
-            <Text style={styles.reconnectText}>Go to Settings → Reconnect</Text>
+            <Text style={styles.reconnectText}>Reconnect Instagram</Text>
           </TouchableOpacity>
         )}
 
@@ -265,10 +264,12 @@ export function SnapshotErrorCard({ error, onDismiss }: Props) {
           </Text>
         </View>
 
-        {/* Raw error code for reference */}
-        <Text style={styles.errorCode}>
-          Error code: {code}{error instanceof SnapshotError && error.message ? ` — ${error.message}` : ''}
-        </Text>
+        {/* Error reference — only shown for unknown errors to help support */}
+        {!profile.isKnown && (
+          <Text style={styles.errorCode}>
+            Reference: {code}
+          </Text>
+        )}
 
       </View>
     </View>

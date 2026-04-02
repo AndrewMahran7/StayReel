@@ -18,7 +18,8 @@ import { useListData, type ListType, type IgUser } from '@/hooks/useListData';
 import { useReviewPrompt }      from '@/hooks/useReviewPrompt';
 import { useAuthStore }         from '@/store/authStore';
 import { useSubscriptionStore } from '@/store/subscriptionStore';
-import { useUnfollowUser }      from '@/hooks/useUnfollowUser';
+// NOTE: Unfollow feature temporarily disabled for account safety.
+// import { useUnfollowUser }      from '@/hooks/useUnfollowUser';
 import { SearchBar }            from '@/components/SearchBar';
 import { UserListItem }         from '@/components/UserListItem';
 import { BannerAdView }         from '@/components/BannerAdView';
@@ -75,7 +76,8 @@ export default function ListsScreen() {
 
   const igAccountId = useAuthStore((s) => s.igAccountId);
   const isPro        = useSubscriptionStore((s) => s.isPro);
-  const { unfollow, unfollowed, pendingId } = useUnfollowUser();
+  // Unfollow feature temporarily disabled for account safety.
+  // const { unfollow, unfollowed, pendingId } = useUnfollowUser();
   const [paywallOpen, setPaywallOpen] = useState(false);
 
   // In-app review prompt — fires once when a high-value list loads with results
@@ -255,13 +257,6 @@ export default function ListsScreen() {
           <UserListItem
             user={item}
             index={index}
-            onUnfollow={
-              activeType === 'not_following_back' && igAccountId
-                ? (igId) => unfollow(igAccountId, igId)
-                : undefined
-            }
-            unfollowPending={pendingId === item.ig_id}
-            unfollowDone={unfollowed.has(item.ig_id)}
           />
         )}
         ListEmptyComponent={

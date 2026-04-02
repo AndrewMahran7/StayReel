@@ -18,6 +18,7 @@ import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/store/authStore';
 import { useSubscriptionStore } from '@/store/subscriptionStore';
 import { fetchWithTimeout } from '@/lib/fetchWithTimeout';
+import { TermsAcceptanceModal } from '@/components/TermsAcceptanceModal';
 import C from '@/lib/colors';
 
 function isLoginPage(url: string) {
@@ -34,6 +35,7 @@ const IG_LOGIN_URL = 'https://www.instagram.com/accounts/login/?next=%2F';
 
 export default function ConnectInstagramScreen() {
   const { setIgAccountId, session } = useAuthStore();
+  const termsAccepted = useAuthStore((s) => s.termsAccepted);
   const hydrateSub = useSubscriptionStore((s) => s.hydrate);
   const router = useRouter();
   const qc = useQueryClient();
@@ -41,6 +43,7 @@ export default function ConnectInstagramScreen() {
   const [webviewKey, setWebviewKey]   = useState(0);
   const [loggedIn, setLoggedIn]       = useState(false); // feed is visible
   const hasSubmitted = useRef(false);
+  const [showTerms, setShowTerms]     = useState(!termsAccepted);
 
   // Track whether the user has left the login page
   const onNavigationStateChange = useCallback((nav: any) => {
@@ -138,6 +141,12 @@ export default function ConnectInstagramScreen() {
 
   return (
     <SafeAreaView style={styles.safe}>
+      {/* Terms acceptance gate — must accept before connecting IG */}
+      <TermsAcceptanceModal
+        visible={showTerms}
+        onAccepted={() => setShowTerms(false)}
+      />
+
       {/* Header */}
       <View style={styles.header}>
         <Ionicons name="logo-instagram" size={22} color={C.accent} />
@@ -147,7 +156,7 @@ export default function ConnectInstagramScreen() {
       <Text style={styles.subtitle}>
         {loggedIn
           ? 'Tap the button below to connect this Instagram account to StayReel.'
-          : 'Log in with your Instagram credentials below. Your password goes directly to Instagram — StayReel only receives the session token.'}
+          : 'Log in with your Instagram credentials below. Your password goes directly to Instagram — StayReel only receives the session token.\n\nNote: Instagram may occasionally ask you to re-verify your account. This is normal behavior.'}
       </Text>
 
       {/* WebView */}
