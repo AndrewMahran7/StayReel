@@ -133,15 +133,22 @@ Deno.serve(async (req: Request) => {
     // Free users see only a preview; pro users get the full list.
     const { data: profile } = await adminClient()
       .from("profiles")
-      .select("subscription_status, subscription_expires_at")
+      .select("subscription_status, subscription_expires_at, promo_until")
       .eq("id", caller.userId)
       .maybeSingle();
 
     const dbStatus    = profile?.subscription_status ?? null;
     const dbExpiresAt = profile?.subscription_expires_at ?? null;
-    const subActive   = profile
+    const promoUntil  = profile?.promo_until ?? null;
+
+    // Active promo that hasn't expired grants Pro access
+    const promoActive = promoUntil && new Date(promoUntil) > new Date();
+
+    const subActive   = promoActive || (
+      profile
       && ["active", "trial"].includes(dbStatus ?? "")
-      && (!dbExpiresAt || new Date(dbExpiresAt) > new Date());
+      && (!dbExpiresAt || new Date(dbExpiresAt) > new Date())
+    );
     const isFreeUser  = !subActive;
 
     const totalCount = allItems.length;

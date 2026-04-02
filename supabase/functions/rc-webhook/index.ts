@@ -118,15 +118,48 @@ Deno.serve(async (req: Request) => {
     ? new Date(event.expiration_at_ms).toISOString()
     : null;
 
-  // ── 4. Persist to profiles ─────────────────────────────────────
+  // ── 3b. Protect promo-granted access ──────────────────────────
+  // If the user has an active promo (promo_until in the future), a
+  // downgrade event from RC (EXPIRATION, CANCELLATION, etc.) must NOT
+  // overwrite their Pro access. We only allow RC upgrades through.
   const db = adminClient();
+
+  const { data: currentProfile } = await db
+    .from("profiles")
+    .select("promo_until")
+    .eq("id", userId)
+    .maybeSingle();
+
+  const promoActive =
+    currentProfile?.promo_until &&
+    new Date(currentProfile.promo_until) > new Date();
+
+  if (promoActive && subscriptionStatus !== "active" && subscriptionStatus !== "trial") {
+    console.log(
+      `[rc-webhook] Skipping downgrade for user ${userId} — active promo until ${currentProfile.promo_until}`,
+    );
+    return jsonResponse({ ok: true, skipped: "active_promo" });
+  }
+
+  // If this is a real subscription activation, clear the promo fields
+  // so the user cleanly transitions to a paid plan.
+  const clearPromo =
+    (subscriptionStatus === "active" || subscriptionStatus === "trial") && promoActive;
+
+  // ── 4. Persist to profiles ─────────────────────────────────────
+  const updatePayload: Record<string, unknown> = {
+    subscription_status:     subscriptionStatus,
+    subscription_expires_at: subscriptionExpiresAt,
+    rc_customer_id:          event.original_app_user_id || userId,
+  };
+  if (clearPromo) {
+    updatePayload.promo_code_id = null;
+    updatePayload.promo_until   = null;
+  }
+
   const { error } = await db
     .from("profiles")
-    .update({
-      subscription_status:     subscriptionStatus,
-      subscription_expires_at: subscriptionExpiresAt,
-      rc_customer_id:          event.original_app_user_id || userId,
-    })
+    .update(updatePayload)
     .eq("id", userId);
 
   if (error) {

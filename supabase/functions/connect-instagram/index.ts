@@ -14,7 +14,7 @@ import { errorResponse, Errors } from "../_shared/errors.ts";
 import { requireAuth } from "../_shared/auth.ts";
 import { adminClient } from "../_shared/supabase_client.ts";
 import { writeAuditEvent, extractIp } from "../_shared/audit.ts";
-import { getIgCurrentUser } from "../_shared/instagram.ts";
+import { getIgCurrentUser, assignDeviceProfile } from "../_shared/instagram.ts";
 import { vaultStore, vaultDelete } from "../_shared/vault.ts";
 
 Deno.serve(async (req: Request) => {
@@ -51,7 +51,7 @@ Deno.serve(async (req: Request) => {
 
     const { data: existingAccount } = await adminClient()
       .from("ig_accounts")
-      .select("id, vault_secret_id")
+      .select("id, vault_secret_id, device_ua, device_id, android_id")
       .eq("user_id", userId)
       .eq("ig_user_id", igUser.ig_id)
       .maybeSingle();
@@ -98,6 +98,22 @@ Deno.serve(async (req: Request) => {
 
     if (upsertErr) {
       throw Errors.internal(`Failed to save IG account: ${upsertErr.message}`);
+    }
+
+    // Assign stable device fingerprint if not already present.
+    // On reconnect, the existing fingerprint is preserved so Instagram
+    // sees the same device identity even with a new session cookie.
+    if (!existingAccount?.device_ua) {
+      const dp = assignDeviceProfile();
+      await adminClient()
+        .from("ig_accounts")
+        .update({
+          device_ua:  dp.ua,
+          device_id:  dp.deviceId,
+          android_id: dp.androidId,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", account.id);
     }
 
     await writeAuditEvent({

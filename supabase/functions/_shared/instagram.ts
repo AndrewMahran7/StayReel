@@ -189,8 +189,9 @@ const IG_API = "https://i.instagram.com/api/v1";
 const IG_APP_ID = "936619743392459";
 
 /**
- * Rotate through realistic Instagram Android app versions + devices.
- * A fixed User-Agent across all users is a fingerprint — vary it per request.
+ * Pool of realistic Instagram Android app User-Agent strings.
+ * One is assigned permanently per IG account on connect and reused for
+ * all future requests — never rotated per request.
  */
 const USER_AGENTS = [
   "Instagram 314.0.0.35.109 Android (26/8.0.0; 480dpi; 1080x1920; OnePlus; ONEPLUS A5000; OnePlus5; qcom; en_US; 556543836)",
@@ -199,6 +200,37 @@ const USER_AGENTS = [
   "Instagram 308.0.0.41.122 Android (31/12; 440dpi; 1080x2400; Google; Pixel 5; redfin; redfin; en_US; 547489008)",
   "Instagram 315.0.0.30.109 Android (33/13.0; 400dpi; 1080x2400; Google; Pixel 7; panther; panther; en_US; 558471039)",
 ];
+
+// ─────────────────────────────────────────────────────────────
+// Stable device fingerprint
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * Persistent device identity assigned once per IG account.
+ * Every Instagram request for a given job uses the same profile
+ * so the session looks like one stable Android device.
+ */
+export interface DeviceProfile {
+  /** Full User-Agent string (e.g. Instagram 314… Android …) */
+  ua: string;
+  /** UUID for the X-IG-Device-ID header */
+  deviceId: string;
+  /** Android device ID for X-IG-Android-ID (format: android-<16 hex chars>) */
+  androidId: string;
+}
+
+/**
+ * Creates a new random-but-stable device fingerprint.
+ * Call once per IG account (on connect); persist the result in ig_accounts.
+ */
+export function assignDeviceProfile(): DeviceProfile {
+  const ua = USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
+  const deviceId = crypto.randomUUID();
+  const bytes = new Uint8Array(8);
+  crypto.getRandomValues(bytes);
+  const androidId = `android-${Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("")}`;
+  return { ua, deviceId, androidId };
+}
 
 /** Hard page cap per direction per run.
  *  big_list accounts return ~20 users/page on the followers endpoint,
@@ -209,7 +241,7 @@ const PAGE_SIZE = 200;
 const BACKOFF_BASE_MS = 2_000;
 const BACKOFF_MAX_MS  = 32_000;
 const BACKOFF_JITTER  = 1_000;
-const MAX_RETRIES     = 4;
+const MAX_RETRIES     = 2;
 
 /** Polite inter-page pause: 10 000–15 000 ms randomised. */
 const PAGE_DELAY_MIN  = 10_000;
@@ -229,9 +261,11 @@ function extractCsrf(cookie: string): string {
   return cookie.match(/csrftoken=([^;\s]+)/)?.[1] ?? "";
 }
 
-function buildHeaders(cookie: string): HeadersInit {
-  const ua = USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
-  return {
+function buildHeaders(cookie: string, device?: DeviceProfile): HeadersInit {
+  // Use the stable device UA when available; fall back to random only for
+  // legacy code paths (capture-snapshot, connect-instagram initial validation).
+  const ua = device?.ua ?? USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
+  const headers: Record<string, string> = {
     "User-Agent":           ua,
     "Cookie":               cookie,
     "X-CSRFToken":          extractCsrf(cookie),
@@ -241,6 +275,10 @@ function buildHeaders(cookie: string): HeadersInit {
     "Accept-Language":      "en-US",
     "Accept":               "application/json",
   };
+  // Stable device identity headers — only sent when a DeviceProfile is provided.
+  if (device?.deviceId)  headers["X-IG-Device-ID"]  = device.deviceId;
+  if (device?.androidId) headers["X-IG-Android-ID"] = device.androidId;
+  return headers;
 }
 
 function sleep(ms: number): Promise<void> {
@@ -293,10 +331,10 @@ interface IgResponse { ok: true; body: Record<string, unknown>; }
 interface IgFailure  { ok: false; failureCode: FailureCode; }
 type IgResult = IgResponse | IgFailure;
 
-async function igGet(url: string, cookie: string): Promise<IgResult> {
+async function igGet(url: string, cookie: string, device?: DeviceProfile): Promise<IgResult> {
   let res: Response;
   try {
-    res = await fetch(url, { method: "GET", headers: buildHeaders(cookie) });
+    res = await fetch(url, { method: "GET", headers: buildHeaders(cookie, device) });
   } catch {
     return { ok: false, failureCode: "NETWORK_ERROR" };
   }
@@ -334,12 +372,13 @@ async function igGet(url: string, cookie: string): Promise<IgResult> {
 const NON_RETRYABLE: FailureCode[] = [
   "CHALLENGE_REQUIRED", "CHECKPOINT_REQUIRED",
   "SESSION_EXPIRED", "PRIVATE_ACCOUNT", "USER_NOT_FOUND",
+  "SUSPICIOUS_RESPONSE", "IG_RATE_LIMITED",
 ];
 
-async function igGetWithRetry(url: string, cookie: string): Promise<IgResult> {
+async function igGetWithRetry(url: string, cookie: string, device?: DeviceProfile): Promise<IgResult> {
   let attempt = 0;
   while (true) {
-    const result = await igGet(url, cookie);
+    const result = await igGet(url, cookie, device);
     if (result.ok) return result;
     if (NON_RETRYABLE.includes(result.failureCode)) return result;
     if (attempt >= MAX_RETRIES) return result;
@@ -364,8 +403,9 @@ export interface ProfileInfo {
 
 async function getCurrentUserProfile(
   cookie: string,
+  device?: DeviceProfile,
 ): Promise<{ ok: true; profile: ProfileInfo } | { ok: false; failureCode: FailureCode }> {
-  const result = await igGetWithRetry(`${IG_API}/accounts/current_user/?edit=true`, cookie);
+  const result = await igGetWithRetry(`${IG_API}/accounts/current_user/?edit=true`, cookie, device);
   if (!result.ok) return result;
 
   const u  = (result.body.user ?? result.body) as Record<string, unknown>;
@@ -521,6 +561,12 @@ export interface ChunkedFetchOptions {
   maxPages?: number;
   /** Reuse a rank_token across invocations for stable big_list pagination. */
   rankToken?: string;
+  /** Stable device identity — ensures every request uses the same UA + headers. */
+  deviceProfile?: DeviceProfile;
+  /** Skip the /current_user/ warmup call (job already did it in a prior invocation). */
+  skipWarmup?: boolean;
+  /** Use extra-conservative pacing for first-ever snapshots. */
+  ultraSafe?: boolean;
 }
 
 export interface ChunkedFetchResult {
@@ -555,7 +601,15 @@ export async function fetchEdgeListChunked(
     timeBudgetMs = 70_000,
     maxPages = 50,
     rankToken: providedRankToken,
+    deviceProfile,
+    skipWarmup = false,
+    ultraSafe = false,
   } = options;
+
+  // Ultra-safe mode: longer delays + lower page cap for first-ever snapshots.
+  const pageDelayMin     = ultraSafe ? 18_000 : PAGE_DELAY_MIN;
+  const pageDelayMax     = ultraSafe ? 25_000 : PAGE_DELAY_MAX;
+  const effectiveMaxPages = ultraSafe ? Math.min(maxPages, 20) : maxPages;
 
   const deadline   = Date.now() + timeBudgetMs;
   const rankToken  = providedRankToken ?? newRankToken(igUserId);
@@ -567,12 +621,13 @@ export async function fetchEdgeListChunked(
   // request before hitting the friends list endpoint. Real Instagram app always
   // fetches the current user profile before paginating friendships — skipping
   // this cold jump onto the friendships API looks robotic.
-  if (!startCursor) {
-    await igGet(`${IG_API}/accounts/current_user/?edit=true`, cookie);
-    await sleep(randomBetween(1_500, 3_000)); // natural navigation delay
+  // skipWarmup=true when the job already performed its warmup in a prior invocation.
+  if (!startCursor && !skipWarmup) {
+    await igGet(`${IG_API}/accounts/current_user/?edit=true`, cookie, deviceProfile);
+    await sleep(randomBetween(2_000, 4_000)); // natural navigation delay
   }
 
-  while (page < maxPages) {
+  while (page < effectiveMaxPages) {
     // Time-budget check before each page fetch
     if (Date.now() >= deadline) {
       console.log(`[ig-chunked] ${direction}: time budget hit at page ${page} (${edges.length} edges)`);
@@ -584,7 +639,7 @@ export async function fetchEdgeListChunked(
     if (nextMaxId) qs.set("max_id", nextMaxId);
 
     const url = `${IG_API}/friendships/${igUserId}/${direction}/?${qs.toString()}`;
-    const result = await igGetWithRetry(url, cookie);
+    const result = await igGetWithRetry(url, cookie, deviceProfile);
 
     if (!result.ok) {
       console.warn(`[ig-chunked] ${direction} page ${page + 1} failed: ${result.failureCode}`);
@@ -619,11 +674,11 @@ export async function fetchEdgeListChunked(
       if (bigList) {
         // big_list retry: wait and re-request with a fresh token
         const freshToken = newRankToken(igUserId);
-        await sleep(randomBetween(8_000, 12_000));
+        await sleep(randomBetween(ultraSafe ? 12_000 : 8_000, ultraSafe ? 18_000 : 12_000));
         const retryQs = new URLSearchParams({ count: String(randomPageSize()) });
         retryQs.set("rank_token", freshToken);
         const retryResult = await igGetWithRetry(
-          `${IG_API}/friendships/${igUserId}/${direction}/?${retryQs.toString()}`, cookie
+          `${IG_API}/friendships/${igUserId}/${direction}/?${retryQs.toString()}`, cookie, deviceProfile
         );
         if (retryResult.ok) {
           const rc = retryResult.body.next_max_id
@@ -631,7 +686,7 @@ export async function fetchEdgeListChunked(
             ?? null;
           if (rc && String(rc).length > 0 && rc !== "0" && rc !== 0) {
             nextMaxId = String(rc);
-            await sleep(randomBetween(PAGE_DELAY_MIN, PAGE_DELAY_MAX));
+            await sleep(randomBetween(pageDelayMin, pageDelayMax));
             continue;
           }
         }
@@ -640,10 +695,10 @@ export async function fetchEdgeListChunked(
       return { edges, nextCursor: null, isComplete: !bigList, pagesFetched: page, stopReason: bigList ? "PAGE_LIMIT_REACHED" : null, rankToken };
     }
 
-    await sleep(randomBetween(PAGE_DELAY_MIN, PAGE_DELAY_MAX));
+    await sleep(randomBetween(pageDelayMin, pageDelayMax));
   }
 
-  console.warn(`[ig-chunked] ${direction}: maxPages (${maxPages}) hit, stopped at ${edges.length}`);
+  console.warn(`[ig-chunked] ${direction}: maxPages (${effectiveMaxPages}) hit, stopped at ${edges.length}`);
   return { edges, nextCursor: nextMaxId, isComplete: false, pagesFetched: page, stopReason: "PAGE_LIMIT_REACHED", rankToken };
 }
 
@@ -750,8 +805,9 @@ function emptyResult(fetchedAt: string, stopReason: FailureCode): FetchResult {
  */
 export async function getIgCurrentUser(
   cookie: string,
+  device?: DeviceProfile,
 ): Promise<ProfileInfo> {
-  const result = await getCurrentUserProfile(cookie);
+  const result = await getCurrentUserProfile(cookie, device);
   if (!result.ok) {
     switch (result.failureCode) {
       case "SESSION_EXPIRED":

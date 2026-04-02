@@ -19,6 +19,7 @@ import { adminClient }                          from "../_shared/supabase_client
 import { vaultRetrieve }                        from "../_shared/vault.ts";
 import { runSnapshotChunk, SnapshotJobRow }     from "../_shared/snapshotJob.ts";
 import { notifyOwnerOfError }                  from "../_shared/notify.ts";
+import { countRunningJobs, MAX_CONCURRENT_JOBS, tryPromoteQueuedJob } from "../_shared/rate_limit.ts";
 
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return corsPreflightResponse();
@@ -68,7 +69,45 @@ Deno.serve(async (req: Request) => {
       });
     }
 
-    // ── 6. Load IG account + cookie ───────────────────────────
+    // ── 5b. Queued promotion ────────────────────────────────
+    // When a job is queued, check if a slot has opened up. If so,
+    // atomically promote it to 'running' and fall through to run a chunk.
+    // If the slot is still full, return the queued status to the client.
+    if (job.status === "queued") {
+      const runningCount = await countRunningJobs(db);
+      if (runningCount >= MAX_CONCURRENT_JOBS) {
+        return jsonResponse({
+          jobId:            job.id,
+          status:           "queued",
+          phase:            job.phase,
+          pagesDone:        job.pages_done,
+          followersSeen:    (job.followers_json as unknown[]).length,
+          followingSeen:    (job.following_json as unknown[]).length,
+          followerCountApi: job.follower_count_api,
+          followingCountApi:job.following_count_api,
+          done:             false,
+          message:          "Waiting for an available slot\u2026",
+          etaMs:            null,
+        });
+      }
+      const promoted = await tryPromoteQueuedJob(db, job.id);
+      if (!promoted) {
+        // Another concurrent poll already promoted this job; wait one cycle.
+        return jsonResponse({
+          jobId:   job.id,
+          status:  "queued",
+          phase:   job.phase,
+          pagesDone: job.pages_done,
+          done:    false,
+          message: "Starting\u2026",
+          etaMs:   null,
+        });
+      }
+      // Promotion succeeded — refresh the local job object to status=running.
+      (job as any).status = "running";
+    }
+
+    // ── 6. Load IG account + cookie ───────────────────────────────
     const { data: igAccount, error: acctErr } = await db
       .from("ig_accounts")
       .select("id, ig_user_id, vault_secret_id, status")
@@ -92,7 +131,8 @@ Deno.serve(async (req: Request) => {
 
     // Mark IG account suspended if session died mid-job
     if (result.status === 'failed' && result.message &&
-      (result.message.includes("SESSION_EXPIRED") || result.message.includes("CHALLENGE_REQUIRED"))) {
+      (result.message.includes("SESSION_EXPIRED") || result.message.includes("CHALLENGE_REQUIRED")
+       || result.message.includes("CHECKPOINT_REQUIRED"))) {
       await db
         .from("ig_accounts")
         .update({ status: "token_expired", updated_at: new Date().toISOString() })
@@ -100,10 +140,15 @@ Deno.serve(async (req: Request) => {
         .then(undefined, () => {});
     }
 
-    // If Instagram rate-limited mid-job, extend the cooldown by an extra hour
-    // so the user doesn’t immediately retry and get blocked again.
-    if (result.status === 'failed' && result.message?.includes("IG_RATE_LIMITED")) {
-      const extendedAt = new Date(Date.now() + 60 * 60 * 1_000).toISOString();
+    // Extend cooldown for any Instagram-related failure to prevent immediate retry.
+    // 1 hour for explicit rate-limit, 30 minutes for other IG failures.
+    const IG_FAILURE_PATTERNS = ["IG_RATE_LIMITED", "SESSION_EXPIRED", "CHALLENGE_REQUIRED",
+      "CHECKPOINT_REQUIRED", "SUSPICIOUS_RESPONSE", "IG_SESSION_INVALID"];
+    if (result.status === 'failed' && result.message &&
+        IG_FAILURE_PATTERNS.some(p => result.message!.includes(p))) {
+      const isRateLimit = result.message.includes("IG_RATE_LIMITED");
+      const cooldownMs = isRateLimit ? 60 * 60 * 1_000 : 30 * 60 * 1_000;
+      const extendedAt = new Date(Date.now() + cooldownMs).toISOString();
       await db
         .from("ig_accounts")
         .update({ last_snapshot_at: extendedAt, updated_at: new Date().toISOString() })

@@ -117,3 +117,82 @@ export async function checkSnapshotCadence(
   // No-op.
 }
 
+// ── Global concurrency cap ─────────────────────────────────────────────────────────────────────
+//
+// Maximum number of snapshot jobs that may be in status='running' globally
+// at any one time. If the cap is reached, a new job is inserted as 'queued'
+// and promoted to 'running' the next time snapshot-continue polls for it
+// and finds capacity.
+//
+// Rationale: each running job makes ~2–10 Instagram API requests per
+// invocation. At 15 concurrent jobs this is still well under any reasonable
+// IP-level threshold, but creates useful back-pressure as user numbers grow.
+//
+// Adjust this value as infrastructure + monitoring data warrants.
+export const MAX_CONCURRENT_JOBS = 15;
+
+/**
+ * Returns the current number of jobs with status='running'.
+ * Used in both snapshot-start (decide queue vs run) and
+ * snapshot-continue (decide whether to promote a queued job).
+ */
+// deno-lint-ignore no-explicit-any
+export async function countRunningJobs(db: any): Promise<number> {
+  const { count, error } = await db
+    .from("snapshot_jobs")
+    .select("id", { count: "exact", head: true })
+    .eq("status", "running");
+  if (error) {
+    console.error("[queue] countRunningJobs error:", error.message);
+    // Fail-safe: if we can't count, assume at capacity so new jobs queue
+    // rather than bypassing the concurrency cap. Already-running jobs
+    // are unaffected — only new inserts are delayed until the next poll.
+    return MAX_CONCURRENT_JOBS;
+  }
+  return count ?? 0;
+}
+
+/**
+ * Atomically promotes a queued job to running.
+ *
+ * Uses UPDATE … WHERE status='queued' as an optimistic lock:
+ * if two concurrent requests race, only the one whose UPDATE matches the row
+ * wins; the other gets back an empty result and knows it lost.
+ *
+ * Returns true if this caller successfully promoted the job, false otherwise.
+ */
+// deno-lint-ignore no-explicit-any
+export async function tryPromoteQueuedJob(db: any, jobId: string): Promise<boolean> {
+  const now = new Date().toISOString();
+  const { data, error } = await db
+    .from("snapshot_jobs")
+    .update({
+      status:     "running",
+      // Reset started_at so ETA and total_duration_ms reflect actual
+      // execution time, not time spent waiting in the queue.
+      started_at: now,
+      updated_at: now,
+    })
+    .eq("id", jobId)
+    .eq("status", "queued")  // optimistic lock — only matches if still queued
+    .select("id")
+    .maybeSingle();
+  if (error) {
+    console.error("[queue] tryPromoteQueuedJob error:", error.message);
+    return false;
+  }
+  return data !== null;
+}
+
+// ── Queued-job TTL ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Maximum age for a queued job before it is failed as abandoned.
+ *
+ * 30 minutes is generous: even at full capacity a promotion should
+ * happen within a few minutes once any running job completes.  If a
+ * queued job is still sitting after 30 min it means the user closed
+ * the app (no poll loop driving promotion) or every slot has been
+ * occupied for the entire window — both cases warrant cleanup.
+ */
+export const QUEUED_JOB_TTL_MS = 30 * 60_000; // 30 minutes

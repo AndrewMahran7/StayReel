@@ -27,12 +27,20 @@ export interface CaptureResult {
 }
 
 export interface JobProgress {
-  phase:          'followers' | 'following' | 'finalize' | null;
-  pagesDone:      number;
-  followersSeen:  number;
-  followingSeen:  number;
-  followingCached: boolean;
+  phase:            'followers' | 'following' | 'finalize' | null;
+  pagesDone:        number;
+  followersSeen:    number;
+  followingSeen:    number;
+  followingCached:  boolean;
   followerCountApi: number;
+  /** User-facing ETA string, e.g. "About 4 minutes remaining". Null until reliable. */
+  etaLabel:         string | null;
+  /** True when server returned an existing running job rather than starting fresh. */
+  resumed:          boolean;
+  /** True when the job is queued waiting for a concurrency slot. */
+  queued:           boolean;
+  /** Server-provided message for queued state, e.g. "Waiting for an available slot…". */
+  queueMessage:     string | null;
 }
 
 export class SnapshotLimitError extends Error {
@@ -110,18 +118,24 @@ async function authHeaders(): Promise<HeadersInit> {
 }
 
 interface ChunkResponse {
-  jobId:         string;
-  status:        'running' | 'complete' | 'failed';
-  phase:         'followers' | 'following' | 'finalize';
-  pagesDone:     number;
-  followersSeen: number;
-  followingSeen: number;
-  done:          boolean;
+  jobId:            string;
+  status:           'running' | 'complete' | 'failed' | 'queued';
+  phase:            'followers' | 'following' | 'finalize';
+  pagesDone:        number;
+  followersSeen:    number;
+  followingSeen:    number;
+  done:             boolean;
   followingCached?: boolean;
   followerCountApi?: number;
   followingCountApi?: number;
-  error?:        string;
-  message?:      string;
+  error?:           string;
+  message?:         string;
+  /** Estimated remaining ms from the backend ETA formula. */
+  etaMs?:           number | null;
+  /** True when this is the account's first-ever snapshot. */
+  isFirstSnapshot?: boolean;
+  /** True when the server returned an already-running job (app resumed mid-scan). */
+  resumed?:         boolean;
 }
 
 /** Fetch with an AbortController timeout so a hung edge function
@@ -214,6 +228,7 @@ export function useSnapshotCapture() {
   const [error,       setError]       = useState<Error | null>(null);
   const [progress,    setProgress]    = useState<JobProgress>({
     phase: null, pagesDone: 0, followersSeen: 0, followingSeen: 0, followingCached: false,
+    followerCountApi: 0, etaLabel: null, resumed: false,
   });
 
   // Clear any stale error whenever the account changes (sign-out / sign-in
@@ -237,7 +252,7 @@ export function useSnapshotCapture() {
     cancelled.current = false;
     setIsPending(true);
     setError(null);
-    setProgress({ phase: null, pagesDone: 0, followersSeen: 0, followingSeen: 0, followingCached: false, followerCountApi: 0 });
+    setProgress({ phase: null, pagesDone: 0, followersSeen: 0, followingSeen: 0, followingCached: false, followerCountApi: 0, etaLabel: null, resumed: false, queued: false, queueMessage: null });
 
     // Suppress the server-sent "snapshot ready" foreground push while
     // the user is watching the live progress bar.
@@ -246,9 +261,11 @@ export function useSnapshotCapture() {
     try {
       // ── Start ──
       let runFollowingCached = false;   // latched true once any response confirms cache
+      let wasResumed         = false;   // latched true when server returns an existing running job
 
       const first = await startJob(igAccountId);
       if (first.followingCached) runFollowingCached = true;
+      if (first.resumed) wasResumed = true;
       setProgress({
         phase:           first.phase,
         pagesDone:       first.pagesDone,
@@ -256,6 +273,10 @@ export function useSnapshotCapture() {
         followingSeen:   first.followingSeen,
         followingCached: runFollowingCached,
         followerCountApi: first.followerCountApi ?? 0,
+        etaLabel:        computeEtaLabel(first.etaMs),
+        resumed:         wasResumed,
+        queued:          first.status === 'queued',
+        queueMessage:    first.status === 'queued' ? (first.message ?? 'Waiting for an available slot…') : null,
       });
 
       if (first.done) {
@@ -282,6 +303,10 @@ export function useSnapshotCapture() {
             followingSeen:   current.followingSeen,
             followingCached: runFollowingCached,
             followerCountApi: current.followerCountApi ?? 0,
+            etaLabel:        computeEtaLabel(current.etaMs),
+            resumed:         wasResumed,
+            queued:          current.status === 'queued',
+            queueMessage:    current.status === 'queued' ? (current.message ?? 'Waiting for an available slot…') : null,
           });
         } catch (pollErr) {
           retries++;
@@ -346,7 +371,23 @@ export function useSnapshotCapture() {
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function delay(ms: number) { return new Promise((r) => setTimeout(r, ms)); }
-
+/**
+ * Converts a backend etaMs value to a short user-facing string.
+ *
+ * Thresholds are deliberately coarse so the copy feels honest:
+ *   ≤ 0 ms        → "Finishing up…"
+ *   < 45 s        → "Less than a minute remaining"
+ *   45 s – 90 s   → "About a minute remaining"
+ *   ≥ 90 s        → "About N minutes remaining"
+ */
+export function computeEtaLabel(etaMs: number | null | undefined): string | null {
+  if (etaMs == null) return null;
+  if (etaMs <= 0)    return 'Finishing up…';
+  if (etaMs < 45_000) return 'Less than a minute remaining';
+  if (etaMs < 90_000) return 'About a minute remaining';
+  const mins = Math.round(etaMs / 60_000);
+  return `About ${mins} minute${mins !== 1 ? 's' : ''} remaining`;
+}
 function finalise(chunk: ChunkResponse): CaptureResult {
   return {
     jobId:   chunk.jobId,

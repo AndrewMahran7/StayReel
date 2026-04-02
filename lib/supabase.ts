@@ -21,6 +21,11 @@ export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON, {
   },
 });
 
+// ── Deep-link helpers ───────────────────────────────────────────────
+// Track the last code we attempted so duplicate exchange calls (root
+// layout + auth.tsx) don't race and burn the single-use PKCE code.
+let _lastExchangedCode: string | null = null;
+
 // Handle deep-link callbacks (magic link, OAuth redirect).
 // Called from the root layout bootstrap (cold start) and the warm-start
 // Linking event listener.  Returns true when a session was established.
@@ -29,42 +34,106 @@ export async function handleAuthDeepLink(url: string | null): Promise<boolean> {
 
   console.log('[Auth] Processing deep link:', url);
 
-  // Supabase puts the token_hash in the query string (PKCE flow) or the
-  // URL fragment (#access_token=...&refresh_token=...) for the legacy flow.
   // expo-linking's ParsedURL intentionally omits the fragment, so we
   // extract it manually.
   const { queryParams } = Linking.parse(url);
   const hashIdx  = url.indexOf('#');
   const fragment = hashIdx >= 0 ? url.slice(hashIdx + 1) : null;
 
-  // PKCE flow: code in query params
+  // ── Error from Supabase redirect (e.g. expired token) ──────────
+  const errorParam = queryParams?.error as string | undefined;
+  if (errorParam) {
+    const desc = (queryParams?.error_description as string) ?? errorParam;
+    console.warn('[Auth] Deep link error from provider:', desc);
+    return false;
+  }
+
+  // ── PKCE flow: code in query params ────────────────────────────
   const code = (queryParams?.code as string) ?? null;
   if (code) {
+    if (code === _lastExchangedCode) {
+      console.log('[Auth] Code already exchanged, skipping duplicate');
+      return false;
+    }
+    _lastExchangedCode = code;
     console.log('[Auth] Exchanging PKCE code for session…');
     const { error } = await supabase.auth.exchangeCodeForSession(code);
     if (error) {
       console.warn('[Auth] Code exchange failed:', error.message);
+      _lastExchangedCode = null; // allow retry
       return false;
     }
     console.log('[Auth] Code exchange succeeded');
     return true;
   }
 
-  // Legacy fragment hash token
-  if (fragment) {
-    console.log('[Auth] Setting session from URL fragment…');
-    const { error } = await supabase.auth.setSession({
-      access_token:  new URLSearchParams(fragment).get('access_token')  ?? '',
-      refresh_token: new URLSearchParams(fragment).get('refresh_token') ?? '',
+  // ── Token-hash fallback (non-PKCE verify, e.g. email change) ──
+  const tokenHash = queryParams?.token_hash as string | undefined;
+  const type      = queryParams?.type as string | undefined;
+  if (tokenHash && type) {
+    console.log('[Auth] Verifying OTP via token_hash…');
+    const { error } = await supabase.auth.verifyOtp({
+      token_hash: tokenHash,
+      type: type as 'magiclink' | 'signup' | 'invite' | 'recovery' | 'email',
     });
     if (error) {
-      console.warn('[Auth] Fragment session failed:', error.message);
+      console.warn('[Auth] verifyOtp failed:', error.message);
       return false;
     }
+    console.log('[Auth] verifyOtp succeeded');
     return true;
   }
 
+  // ── Legacy fragment hash token (#access_token=…&refresh_token=…) ─
+  if (fragment) {
+    const fragParams   = new URLSearchParams(fragment);
+    const accessToken  = fragParams.get('access_token');
+    const refreshToken = fragParams.get('refresh_token');
+    if (accessToken && refreshToken) {
+      console.log('[Auth] Setting session from URL fragment…');
+      const { error } = await supabase.auth.setSession({
+        access_token:  accessToken,
+        refresh_token: refreshToken,
+      });
+      if (error) {
+        console.warn('[Auth] Fragment session failed:', error.message);
+        return false;
+      }
+      return true;
+    }
+  }
+
+  console.log('[Auth] Deep link contained no auth params — ignoring');
   return false;
+}
+
+/**
+ * Standalone PKCE code exchange — called directly from auth.tsx as a
+ * fallback when the root-layout handler misses the URL or loses the race.
+ * Returns a rich result so the UI can display a meaningful error.
+ */
+export async function exchangeAuthCode(
+  code: string,
+  force = false,
+): Promise<{ success: boolean; error?: string }> {
+  if (!force && code === _lastExchangedCode) {
+    console.log('[Auth] exchangeAuthCode: code already processed');
+    return { success: false, error: 'Code already processed' };
+  }
+  _lastExchangedCode = code;
+  try {
+    const { error } = await supabase.auth.exchangeCodeForSession(code);
+    if (error) {
+      console.warn('[Auth] exchangeAuthCode failed:', error.message);
+      _lastExchangedCode = null; // allow retry
+      return { success: false, error: error.message };
+    }
+    console.log('[Auth] exchangeAuthCode succeeded');
+    return { success: true };
+  } catch (e: any) {
+    _lastExchangedCode = null;
+    return { success: false, error: e?.message ?? 'Unknown error during code exchange' };
+  }
 }
 
 // ── Suppress noisy auto-refresh errors ──────────────────────────────

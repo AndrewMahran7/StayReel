@@ -28,6 +28,15 @@ import { vaultRetrieve } from "../_shared/vault.ts";
 
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return corsPreflightResponse();
+  // DISABLED: superseded by /snapshot-start + /snapshot-continue
+  return jsonResponse(
+    {
+      error:   "ENDPOINT_DISABLED",
+      message: "This endpoint has been replaced by /snapshot-start and /snapshot-continue. Please update your client.",
+    },
+    410,
+  );
+  // ─── Everything below is unreachable ──────────────────────
   if (req.method !== "POST") {
     return jsonResponse({ error: "Method not allowed" }, 405);
   }

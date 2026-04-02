@@ -15,7 +15,7 @@
 // the next Edge Function invocation can resume exactly where this one ended.
 
 import { adminClient }                              from "./supabase_client.ts";
-import { fetchEdgeListChunked, IgEdge, FAILURE_MODES } from "./instagram.ts";
+import { fetchEdgeListChunked, IgEdge, FAILURE_MODES, DeviceProfile } from "./instagram.ts";
 import { computeSnapshotDiff }                     from "./diff.ts";
 import { writeDiff, loadPreviousSnapshot }          from "./diff_writer.ts";
 import { sendPushNotification }                    from "./push.ts";
@@ -57,13 +57,66 @@ const MAX_PAGES_PER_INVOCATION = 45;
 /** Minimum remaining time (ms) to auto-advance to the next phase in the same call. */
 const ADVANCE_THRESHOLD_MS    = 15_000;
 
-// ── Types ──────────────────────────────────────────────────────────────────
+// ── ETA estimation ────────────────────────────────────────────────────────────
+/**
+ * Returns estimated remaining milliseconds for a running snapshot job.
+ *
+ * Formula:
+ *   msPerPage   = elapsedMs / pagesDone         (actual timing, or conservative default)
+ *   avgEdges    = followersSeen / pagesDone
+ *   pagesLeft   = ceil((followerCountApi - followersSeen) / avgEdges)  (followers remaining)
+ *               + ceil(followingCountApi / avgEdges)  (skipped when following is cached)
+ *   etaMs       = pagesLeft × msPerPage
+ *
+ * Returns null when pagesDone < 2 (not enough real data for a reliable estimate).
+ * Returns 0 during the finalize phase ("finishing up").
+ */
+function computeEtaMs(
+  startedAt:             string | null,
+  pagesDone:             number,
+  followersSeen:         number,
+  followerCountApi:      number,
+  followingCountApi:     number,
+  isFirstSnapshot:       boolean,
+  followingWillBeCached: boolean,
+  phase:                 string,
+): number | null {
+  if (phase === "finalize") return 0;
+  if (pagesDone < 2) return null; // too little data for a reliable estimate
+
+  const startMs   = startedAt ? new Date(startedAt).getTime() : null;
+  const elapsedMs = startMs ? Date.now() - startMs : null;
+
+  // ms/page: prefer actual wall-clock ratio when available.
+  // Fallbacks: normal mode ≈ 13.5 s (midpoint of 10–15 s range + overhead);
+  // ultra-safe (first snapshot) ≈ 21.5 s (midpoint of 18–25 s range).
+  const msPerPage = (elapsedMs && pagesDone > 0)
+    ? elapsedMs / pagesDone
+    : (isFirstSnapshot ? 21_500 : 13_500);
+
+  const avgEdgesPerPage = Math.max(1, followersSeen / pagesDone);
+
+  let pagesLeft = 0;
+  if (phase === "followers") {
+    const followersLeft = Math.max(0, (followerCountApi || followersSeen) - followersSeen);
+    pagesLeft += Math.ceil(followersLeft / avgEdgesPerPage);
+    if (!followingWillBeCached) {
+      pagesLeft += Math.ceil((followingCountApi || avgEdgesPerPage * 3) / avgEdgesPerPage);
+    }
+  } else if (phase === "following" && !followingWillBeCached) {
+    pagesLeft += Math.ceil((followingCountApi || avgEdgesPerPage * 3) / avgEdgesPerPage);
+  }
+
+  return Math.round(pagesLeft * msPerPage);
+}
+
+// ── Types ─────────────────────────────────────────────────────────────────────
 export interface SnapshotJobRow {
   id: string;
   user_id: string;
   ig_account_id: string;
   source: string;
-  status: "running" | "complete" | "failed";
+  status: "running" | "complete" | "failed" | "queued";
   phase: "followers" | "following" | "finalize";
   followers_cursor: string | null;
   following_cursor: string | null;
@@ -76,11 +129,21 @@ export interface SnapshotJobRow {
   pages_done: number;
   error: string | null;
   updated_at: string | null;
+  // Safety fields (020_snapshot_safety)
+  device_ua: string | null;
+  device_id: string | null;
+  android_id: string | null;
+  warmup_done: boolean;
+  is_first_snapshot: boolean;
+  // Telemetry fields (021_snapshot_telemetry)
+  started_at: string | null;
+  completed_at: string | null;
+  total_duration_ms: number | null;
 }
 
 export interface ChunkResult {
   jobId: string;
-  status: "running" | "complete" | "failed";
+  status: "running" | "complete" | "failed" | "queued";
   phase: string;
   pagesDone: number;
   followersSeen: number;
@@ -90,6 +153,12 @@ export interface ChunkResult {
   done: boolean;
   message: string;
   followingCached: boolean;
+  /** Estimated milliseconds remaining. null when estimate is not yet reliable. */
+  etaMs: number | null;
+  /** True when this is the account's first-ever snapshot (ultra-safe pacing). */
+  isFirstSnapshot: boolean;
+  /** True when snapshot-start found an existing running job and returned it. */
+  resumed: boolean;
 }
 
 // ── Main worker ────────────────────────────────────────────────────────────
@@ -109,6 +178,22 @@ export async function runSnapshotChunk(
   const invocationStart = Date.now();
   const db = adminClient();
 
+  // Telemetry: track pages and edges at the start of this invocation for structured logging.
+  const pagesAtStart = job.pages_done;
+  // Whether the following list will be served from cache — pre-filled following_json
+  // with no cursor means the following phase will skip the Instagram API fetch.
+  const followingWillBeCached = Array.isArray(job.following_json) &&
+    (job.following_json as unknown[]).length > 0 && job.following_cursor === null;
+
+  // Build a stable device profile from the job-persisted fingerprint.
+  // Falls back to undefined for legacy jobs created before 020_snapshot_safety.
+  const deviceProfile: DeviceProfile | undefined = job.device_ua
+    ? { ua: job.device_ua, deviceId: job.device_id ?? "", androidId: job.android_id ?? "" }
+    : undefined;
+
+  // Ultra-safe mode uses a lower page cap for first-ever snapshots.
+  const safeMaxPages = job.is_first_snapshot ? 20 : MAX_PAGES_PER_INVOCATION;
+
   // Helper: how many ms remain in this invocation's budget.
   const remaining = () => TIME_BUDGET_MS - (Date.now() - invocationStart);
 
@@ -123,8 +208,8 @@ export async function runSnapshotChunk(
   // Shorthand that auto-populates API counts from the job row
   const mk = (
     status: "running" | "complete" | "failed", p: string,
-    pd: number, fs: number, fws: number, done: boolean, msg: string, fwc = false,
-  ) => makeResult(job.id, status, p, pd, fs, fws, done, msg, fwc, job.follower_count_api, job.following_count_api);
+    pd: number, fs: number, fws: number, done: boolean, msg: string, fwc = false, eta: number | null = null,
+  ) => makeResult(job.id, status, p, pd, fs, fws, done, msg, fwc, job.follower_count_api, job.following_count_api, job.is_first_snapshot, eta);
 
   // ── Phase: followers ─────────────────────────────────────────────────────
   if (phase === "followers") {
@@ -134,7 +219,10 @@ export async function runSnapshotChunk(
       startCursor:  actualFollowersCursor,
       rankToken:    savedRankToken ?? undefined,
       timeBudgetMs: remaining() - 5_000,  // 5 s margin for DB writes
-      maxPages:     MAX_PAGES_PER_INVOCATION,
+      maxPages:     safeMaxPages,
+      deviceProfile,
+      skipWarmup:   job.warmup_done,
+      ultraSafe:    job.is_first_snapshot,
     });
 
     followers    = deduplicateEdges([...followers, ...result.edges]);
@@ -144,18 +232,21 @@ export async function runSnapshotChunk(
     if (result.stopReason && result.stopReason !== "PAGE_LIMIT_REACHED") {
       // Fatal Instagram error — fail the job
       const mode = FAILURE_MODES[result.stopReason];
-      await failJob(db, job.id, mode?.uiMessage ?? result.stopReason);
+      await failJob(db, job.id, mode?.uiMessage ?? result.stopReason, job.started_at);
       return mk("failed", phase, pagesDone, followers.length, following.length, true, mode?.uiMessage ?? result.stopReason);
     }
 
     const followersPhaseDone = result.isComplete || result.nextCursor === null;
 
-    // Persist follower progress
+    // Persist follower progress (mark warmup done so subsequent invocations skip it)
+    const followerInvMs = Date.now() - invocationStart;
+    console.log(`[timing] job=${job.id} phase=followers invocation_ms=${followerInvMs} pages_this_inv=${pagesDone - pagesAtStart} edges_total=${followers.length}`);
     await db.from("snapshot_jobs").update({
       followers_json:   followers,
       followers_cursor: followersPhaseDone ? null : followersCursor,
       phase:            followersPhaseDone ? "following" : "followers",
       pages_done:       pagesDone,
+      warmup_done:      true,
       updated_at:       new Date().toISOString(),
     }).eq("id", job.id);
 
@@ -164,7 +255,8 @@ export async function runSnapshotChunk(
       console.log(`[job ${job.id}] followers complete (${followers.length} edges). Advancing to following.`);
     } else {
       console.log(`[job ${job.id}] followers chunk done: ${followers.length} so far, cursor saved.`);
-      return mk("running", "followers", pagesDone, followers.length, following.length, false, `Fetched ${followers.length} followers so far…`);
+      const eta = computeEtaMs(job.started_at, pagesDone, followers.length, job.follower_count_api, job.following_count_api, job.is_first_snapshot, followingWillBeCached, "followers");
+      return mk("running", "followers", pagesDone, followers.length, following.length, false, `Fetched ${followers.length} followers so far…`, false, eta);
     }
   }
 
@@ -185,7 +277,8 @@ export async function runSnapshotChunk(
       if (rem < ADVANCE_THRESHOLD_MS) {
         // Not enough time — defer to next invocation
         console.log(`[job ${job.id}] following deferred (${rem}ms remaining)`);
-        return mk("running", "following", pagesDone, followers.length, following.length, false, "Fetching following list…");
+        const eta = computeEtaMs(job.started_at, pagesDone, followers.length, job.follower_count_api, job.following_count_api, job.is_first_snapshot, followingWillBeCached, "following");
+        return mk("running", "following", pagesDone, followers.length, following.length, false, "Fetching following list…", false, eta);
       }
 
       const { cursor: actualFollowingCursor, rankToken: savedFollowingRankToken } = parseCursorField(followingCursor);
@@ -194,7 +287,10 @@ export async function runSnapshotChunk(
         startCursor:  actualFollowingCursor,
         rankToken:    savedFollowingRankToken ?? undefined,
         timeBudgetMs: remaining() - 5_000,
-        maxPages:     MAX_PAGES_PER_INVOCATION,
+        maxPages:     safeMaxPages,
+        deviceProfile,
+        skipWarmup:   true,  // warmup already done during followers phase
+        ultraSafe:    job.is_first_snapshot,
       });
 
       following    = deduplicateEdges([...following, ...result.edges]);
@@ -203,17 +299,20 @@ export async function runSnapshotChunk(
 
       if (result.stopReason && result.stopReason !== "PAGE_LIMIT_REACHED") {
         const mode = FAILURE_MODES[result.stopReason];
-        await failJob(db, job.id, mode?.uiMessage ?? result.stopReason);
+        await failJob(db, job.id, mode?.uiMessage ?? result.stopReason, job.started_at);
         return mk("failed", phase, pagesDone, followers.length, following.length, true, mode?.uiMessage ?? result.stopReason);
       }
 
       const followingPhaseDone = result.isComplete || result.nextCursor === null;
 
+      const followingInvMs = Date.now() - invocationStart;
+      console.log(`[timing] job=${job.id} phase=following invocation_ms=${followingInvMs} pages_this_inv=${pagesDone - pagesAtStart} edges_total=${following.length}`);
       await db.from("snapshot_jobs").update({
         following_json:   following,
         following_cursor: followingPhaseDone ? null : followingCursor,
         phase:            followingPhaseDone ? "finalize" : "following",
         pages_done:       pagesDone,
+        warmup_done:      true,
         updated_at:       new Date().toISOString(),
       }).eq("id", job.id);
 
@@ -222,7 +321,8 @@ export async function runSnapshotChunk(
         console.log(`[job ${job.id}] following complete (${following.length} edges). Advancing to finalize.`);
       } else {
         console.log(`[job ${job.id}] following chunk done: ${following.length} so far.`);
-        return mk("running", "following", pagesDone, followers.length, following.length, false, "Fetching following list…");
+        const eta = computeEtaMs(job.started_at, pagesDone, followers.length, job.follower_count_api, job.following_count_api, job.is_first_snapshot, followingWillBeCached, "following");
+        return mk("running", "following", pagesDone, followers.length, following.length, false, "Fetching following list…", false, eta);
       }
     }
   }
@@ -350,10 +450,17 @@ export async function runSnapshotChunk(
       // Mark job complete — conditional: only if the job is still "running".
       // If two requests race into finalize, the second one will match 0 rows
       // and skip the push, preventing a duplicate notification.
+      const finalizedAt = new Date().toISOString();
+      const totalDurationMs = job.started_at
+        ? Date.now() - new Date(job.started_at).getTime()
+        : null;
+      console.log(`[timing] job=${job.id} phase=finalize total_ms=${totalDurationMs ?? 'unknown'} pages_done=${pagesDone} followers=${followers.length} following=${following.length}`);
       const { data: markedComplete } = await db.from("snapshot_jobs").update({
-        status:     "complete",
-        phase:      "finalize",
-        updated_at: new Date().toISOString(),
+        status:            "complete",
+        phase:             "finalize",
+        completed_at:      finalizedAt,
+        total_duration_ms: totalDurationMs,
+        updated_at:        finalizedAt,
       })
         .eq("id", job.id)
         .eq("status", "running")
@@ -421,7 +528,7 @@ export async function runSnapshotChunk(
 
     } catch (err) {
       const msg = (err as Error).message ?? "Finalization error";
-      await failJob(db, job.id, msg);
+      await failJob(db, job.id, msg, job.started_at);
       return mk("failed", "finalize", pagesDone, followers.length, following.length, true, msg);
     }
   }
@@ -433,11 +540,15 @@ export async function runSnapshotChunk(
 // ── Helpers ────────────────────────────────────────────────────────────────
 
 // deno-lint-ignore no-explicit-any
-async function failJob(db: any, jobId: string, error: string): Promise<void> {
+async function failJob(db: any, jobId: string, error: string, startedAt?: string | null): Promise<void> {
+  const failedAt = new Date().toISOString();
+  const totalDurationMs = startedAt ? Date.now() - new Date(startedAt).getTime() : null;
   await db.from("snapshot_jobs").update({
-    status:     "failed",
+    status:            "failed",
     error,
-    updated_at: new Date().toISOString(),
+    completed_at:      failedAt,
+    total_duration_ms: totalDurationMs,
+    updated_at:        failedAt,
   }).eq("id", jobId);
 }
 
@@ -453,6 +564,9 @@ function makeResult(
   followingCached = false,
   followerCountApi = 0,
   followingCountApi = 0,
+  isFirstSnapshot = false,
+  etaMs: number | null = null,
+  resumed = false,
 ): ChunkResult {
-  return { jobId, status, phase, pagesDone, followersSeen, followingSeen, followerCountApi, followingCountApi, done, message, followingCached };
+  return { jobId, status, phase, pagesDone, followersSeen, followingSeen, followerCountApi, followingCountApi, done, message, followingCached, isFirstSnapshot, etaMs, resumed };
 }

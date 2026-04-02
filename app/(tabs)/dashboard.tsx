@@ -116,20 +116,44 @@ export default function DashboardScreen() {
   // Every label is truthful — no stage claims completion before its time.
   const stage = (() => {
     const p = capture.progress;
-    if (!p.phase) return { step: 1, label: 'Connecting',   headline: 'Connecting to Instagram\u2026',   subtitle: 'Establishing a secure session',                                                         pct: 0.02 };
+    // Queued state: job is waiting for a concurrency slot — show an
+    // honest "waiting" stage instead of pretending to scan.
+    if (p.queued) {
+      return {
+        step:     1,
+        label:    'Queued',
+        headline: 'Waiting for an available slot\u2026',
+        subtitle: p.queueMessage ?? 'We\u2019ll start your snapshot automatically',
+        pct: 0.01,
+      };
+    }
+    if (!p.phase) {
+      const isResuming = p.resumed;
+      return {
+        step:     1,
+        label:    isResuming ? 'Resuming'           : 'Connecting',
+        headline: isResuming ? 'Resuming snapshot\u2026' : 'Connecting to Instagram\u2026',
+        subtitle: isResuming
+          ? 'Carrying on from where your last scan paused'
+          : 'Establishing a secure session',
+        pct: 0.02,
+      };
+    }
     if (p.phase === 'followers') {
       const detail = p.followerCountApi > 0
         ? `${p.followersSeen.toLocaleString()} of ~${p.followerCountApi.toLocaleString()} followers`
         : `${p.followersSeen.toLocaleString()} followers so far`;
       const pct = p.followerCountApi > 0 ? Math.min(0.55, (p.followersSeen / p.followerCountApi) * 0.55) : 0.15;
-      return { step: 2, label: 'Scanning',     headline: 'Scanning your followers\u2026',     subtitle: detail,                                                                                       pct: Math.max(0.05, pct) };
+      const subtitle = p.etaLabel ? `${detail} \u00b7 ${p.etaLabel}` : detail;
+      return { step: 2, label: 'Scanning',  headline: 'Scanning your followers\u2026',  subtitle, pct: Math.max(0.05, pct) };
     }
     if (p.phase === 'following') {
       const detail = p.followingCached ? 'Using cached following list \u2713' : `${p.followingSeen.toLocaleString()} following so far`;
-      return { step: 3, label: 'Comparing',    headline: 'Comparing relationships\u2026',    subtitle: detail,                                                                                       pct: p.followingCached ? 0.85 : 0.65 };
+      const subtitle = p.etaLabel ? `${detail} \u00b7 ${p.etaLabel}` : detail;
+      return { step: 3, label: 'Comparing', headline: 'Comparing relationships\u2026', subtitle, pct: p.followingCached ? 0.85 : 0.65 };
     }
     // finalize
-    return { step: 4, label: 'Building',    headline: 'Building your report\u2026',       subtitle: 'Crunching the numbers',                                                                     pct: 0.95 };
+    return { step: 4, label: 'Building', headline: 'Building your report\u2026', subtitle: 'Almost there\u2026', pct: 0.95 };
   })();
 
   // Clear override once the server confirms it's gone
@@ -313,15 +337,21 @@ export default function DashboardScreen() {
           <View style={styles.progressCard}>
             {/* keep-open warning */}
             <View style={styles.keepOpenRow}>
-              <Ionicons name="information-circle" size={15} color={C.amber} style={{ marginRight: 6 }} />
+              <Ionicons name="shield-checkmark-outline" size={15} color={C.teal} style={{ marginRight: 6 }} />
               <Text style={styles.keepOpenText}>
-                Keep StayReel open while we refresh — if you leave it will pause.
+                {capture.progress.resumed
+                  ? 'Resuming your snapshot from where it paused. '
+                  : 'Scanning slowly to protect your Instagram account. '}
+                You can switch apps — your progress is saved.
               </Text>
             </View>
 
             {/* Step indicators — 4 dots showing which stage we're on */}
             <View style={styles.stepsRow}>
-              {(['Connecting', 'Scanning', 'Comparing', 'Building'] as const).map((lbl, i) => {
+              {(capture.progress.resumed
+                ? ['Resuming', 'Scanning', 'Comparing', 'Building']
+                : ['Connecting', 'Scanning', 'Comparing', 'Building']
+              ).map((lbl, i) => {
                 const stepNum = i + 1;
                 const done    = stage.step > stepNum;
                 const active  = stage.step === stepNum;

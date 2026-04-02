@@ -32,6 +32,9 @@ export interface SubscriptionState {
   status:             SubStatus;
   expiresAt:          string | null;
 
+  // Promo access (server-managed, separate from RC subscriptions)
+  promoUntil:         string | null;
+
   // Free snapshot tracking
   freeSnapshotsUsed:  number;
   freeSnapshotLimit:  number;
@@ -42,6 +45,7 @@ export interface SubscriptionState {
   // Actions
   hydrate:            (userId: string) => Promise<void>;
   setProFromInfo:     (info: CustomerInfo) => void;
+  redeemPromo:        (code: string) => Promise<{ ok: boolean; message: string; grantsUntil?: string }>;
   incrementFreeUsage: () => Promise<void>;
   canTakeSnapshot:    () => boolean;
   reset:              () => void;
@@ -55,6 +59,7 @@ export const useSubscriptionStore = create<SubscriptionState>()((set, get) => ({
   isPro:             false,
   status:            'free',
   expiresAt:         null,
+  promoUntil:        null,
   freeSnapshotsUsed: 0,
   freeSnapshotLimit: FREE_SNAPSHOT_LIMIT,
   hydrated:          false,
@@ -74,7 +79,7 @@ export const useSubscriptionStore = create<SubscriptionState>()((set, get) => ({
       // 2. Load profile data from Supabase
       const { data: profile } = await supabase
         .from('profiles')
-        .select('subscription_status, subscription_expires_at, free_snapshots_used, free_snapshot_limit, referred_by')
+        .select('subscription_status, subscription_expires_at, free_snapshots_used, free_snapshot_limit, referred_by, promo_until')
         .eq('id', userId)
         .maybeSingle();
 
@@ -94,8 +99,16 @@ export const useSubscriptionStore = create<SubscriptionState>()((set, get) => ({
       //    The client must NEVER widen access beyond what the server allows;
       //    it may only apply a more restrictive fallback.
       let isPro = false;
-      let proSource: 'rc' | 'db-fallback' | 'none' = 'none';
-      if (rcReady) {
+      let proSource: 'rc' | 'db-fallback' | 'promo' | 'none' = 'none';
+
+      // Check promo access first (server-managed, independent of RC)
+      const promoUntil = profile?.promo_until ?? null;
+      const promoActive = promoUntil && new Date(promoUntil) > new Date();
+
+      if (promoActive) {
+        isPro = true;
+        proSource = 'promo';
+      } else if (rcReady) {
         isPro = await hasProEntitlement();
         proSource = isPro ? 'rc' : 'none';
       } else if (profile?.subscription_status === 'active' || profile?.subscription_status === 'trial') {
@@ -109,7 +122,7 @@ export const useSubscriptionStore = create<SubscriptionState>()((set, get) => ({
           console.warn('[Subscription] DB says active/trial but subscription_expires_at is in the past — treating as free');
         }
       }
-      console.log(`[Subscription] proSource=${proSource} isPro=${isPro} rcReady=${rcReady} dbStatus=${profile?.subscription_status ?? 'null'}`);
+      console.log(`[Subscription] proSource=${proSource} isPro=${isPro} rcReady=${rcReady} dbStatus=${profile?.subscription_status ?? 'null'} promoUntil=${promoUntil ?? 'none'}`);
 
       // 4. Also read local storage as a fallback for free usage count
       //    (in case the Supabase fetch had stale data on a slow network)
@@ -120,6 +133,7 @@ export const useSubscriptionStore = create<SubscriptionState>()((set, get) => ({
         isPro,
         status:            isPro ? (profile?.subscription_status as SubStatus ?? 'active') : 'free',
         expiresAt:         profile?.subscription_expires_at ?? null,
+        promoUntil:        promoActive ? promoUntil : null,
         freeSnapshotsUsed: usedCount,
         freeSnapshotLimit: dbLimit,
         hydrated:          true,
@@ -205,6 +219,48 @@ export const useSubscriptionStore = create<SubscriptionState>()((set, get) => ({
   /**
    * Reset on sign-out.
    */
+  /**
+   * Redeem a promo code via the edge function.
+   * On success, updates isPro and promoUntil immediately.
+   */
+  async redeemPromo(code: string) {
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) return { ok: false, message: 'Not signed in.' };
+
+      const res = await supabase.functions.invoke('redeem-promo', {
+        body: { code },
+      });
+
+      if (res.error) {
+        const msg = res.error.message ?? 'Unknown error';
+        return { ok: false, message: msg };
+      }
+
+      const body = res.data as { ok?: boolean; error?: string; message?: string; grants_until?: string };
+
+      if (body.error) {
+        return { ok: false, message: body.message ?? body.error };
+      }
+
+      // Success — update store immediately
+      set({
+        isPro: true,
+        status: 'active',
+        expiresAt: body.grants_until ?? null,
+        promoUntil: body.grants_until ?? null,
+      });
+
+      return {
+        ok: true,
+        message: body.message ?? 'Pro access granted!',
+        grantsUntil: body.grants_until,
+      };
+    } catch (e: any) {
+      return { ok: false, message: e?.message ?? 'Failed to redeem code.' };
+    }
+  },
+
   reset() {
     const unsub = get()._unsubListener;
     if (unsub) unsub();
@@ -212,6 +268,7 @@ export const useSubscriptionStore = create<SubscriptionState>()((set, get) => ({
       isPro: false,
       status: 'free',
       expiresAt: null,
+      promoUntil: null,
       freeSnapshotsUsed: 0,
       freeSnapshotLimit: FREE_SNAPSHOT_LIMIT,
       _unsubListener: null,

@@ -30,6 +30,7 @@ import { showCustomerCenter, restorePurchases, isProFromInfo } from '@/lib/reven
 import { useNotificationSettings, NotificationPrefs } from '@/hooks/useNotificationSettings';
 import { SchoolPickerModal } from '@/components/SchoolPickerModal';
 import { ReferralCodeModal } from '@/components/ReferralCodeModal';
+import { PromoCodeModal } from '@/components/PromoCodeModal';
 import { schoolLabel } from '@/lib/schools';
 import C from '@/lib/colors';
 
@@ -47,20 +48,26 @@ export default function SettingsScreen() {
   const [showPaywall, setShowPaywall] = useState(false);
   const [showSchoolPicker, setShowSchoolPicker] = useState(false);
   const [showReferralModal, setShowReferralModal] = useState(false);
+  const [showPromoModal, setShowPromoModal] = useState(false);
   const { settings: notifPrefs, update: updateNotifPref } = useNotificationSettings();
 
   // Subscription
   const isPro  = useSubscriptionStore((s) => s.isPro);
   const status = useSubscriptionStore((s) => s.status);
   const expiresAt = useSubscriptionStore((s) => s.expiresAt);
+  const promoUntil = useSubscriptionStore((s) => s.promoUntil);
 
   const planLabel = isPro
-    ? status === 'trial' ? 'Free Trial' : 'Pro'
+    ? promoUntil
+      ? 'Pro (promo)'
+      : status === 'trial' ? 'Free Trial' : 'Pro'
     : 'Free';
 
-  const expiryLabel = expiresAt
-    ? new Date(expiresAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
-    : null;
+  const expiryLabel = (() => {
+    const dateStr = promoUntil ?? expiresAt;
+    if (!dateStr) return null;
+    return new Date(dateStr).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+  })();
 
   // School attribution — shared query key so picker invalidation refreshes here
   const { data: schoolId = null } = useQuery<string | null>({
@@ -279,8 +286,18 @@ export default function SettingsScreen() {
           <SettingRow
             icon="calendar-outline"
             iconColor={C.textSecondary}
-            title={status === 'trial' ? 'Trial ends' : 'Renews'}
+            title={promoUntil ? 'Promo expires' : status === 'trial' ? 'Trial ends' : 'Renews'}
             value={expiryLabel}
+          />
+        )}
+
+        {!isPro && (
+          <ActionRow
+            icon="pricetag-outline"
+            iconColor={C.green}
+            title="Have a promo code?"
+            subtitle="Redeem for free Pro access"
+            onPress={() => setShowPromoModal(true)}
           />
         )}
 
@@ -480,6 +497,10 @@ export default function SettingsScreen() {
           setShowReferralModal(false);
           refetchReferral();
         }}
+      />
+      <PromoCodeModal
+        visible={showPromoModal}
+        onClose={() => setShowPromoModal(false)}
       />
     </SafeAreaView>
   );

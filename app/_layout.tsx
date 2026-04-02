@@ -28,11 +28,12 @@ function AuthGuard() {
     if (!initialised) return;
 
     const inAuth  = segments[0] === '(auth)';
+    const inAuthCallback = segments[0] === 'auth'; // magic-link callback screen
     const inTabs  = segments[0] === '(tabs)';
     const inModal = segments[0] === 'our-promise' || segments[0] === 'troubleshooting';
 
     if (!session) {
-      if (!inAuth) router.replace('/(auth)/sign-in');
+      if (!inAuth && !inAuthCallback) router.replace('/(auth)/sign-in');
     } else if (!igAccountId) {
       if (segments[1] !== 'connect-instagram') {
         router.replace('/(auth)/connect-instagram');
@@ -211,9 +212,14 @@ export default function RootLayout() {
     );
 
     // Deep-link handler for warm starts (app already running)
-    const handleUrl = ({ url }: { url: string }) => {
+    const handleUrl = async ({ url }: { url: string }) => {
       console.log('[Auth] Deep link received (warm):', url);
-      handleAuthDeepLink(url);
+      try {
+        const ok = await handleAuthDeepLink(url);
+        if (!ok) console.warn('[Auth] Warm deep-link produced no session');
+      } catch (e: any) {
+        console.warn('[Auth] Warm deep-link handler error:', e?.message);
+      }
     };
     const sub = Linking.addEventListener('url', handleUrl);
     // NOTE: getInitialURL is handled inside bootstrap above — do NOT
