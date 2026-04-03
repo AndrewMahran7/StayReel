@@ -39,7 +39,11 @@ function promoErrorMessage(code: string): string {
       return 'Please enter a valid promo code.';
     case 'UNAUTHORIZED':
       return 'Please sign in and try again.';
+    case 'INTERNAL_ERROR':
+    case 'DB_ERROR':
+      return 'Something went wrong on our end. Please try again in a moment.';
     default:
+      console.warn(`[promoErrorMessage] Unmapped error code: "${code}"`);
       return 'Something went wrong. Please try again.';
   }
 }
