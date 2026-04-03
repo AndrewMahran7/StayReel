@@ -12,8 +12,8 @@
 import { useEffect, useRef } from 'react';
 import * as Notifications from 'expo-notifications';
 import { useRouter } from 'expo-router';
-import { useQueryClient } from '@tanstack/react-query';
 import { useAuthStore } from '@/store/authStore';
+import { queryClient } from '@/lib/queryClient';
 import { registerForPushNotificationsIfGranted } from '@/lib/notifications';
 
 /** Map a notification payload `screen` field to a valid tab route. */
@@ -28,7 +28,7 @@ function resolveRoute(screen: string | undefined): string {
 
 export function useNotifications(): void {
   const router = useRouter();
-  const qc     = useQueryClient();
+  const qc     = queryClient;
   const { session, igAccountId, initialised, setPendingNotificationRoute } = useAuthStore();
   const didRegister = useRef(false);
 
@@ -77,7 +77,7 @@ export function useNotifications(): void {
     });
 
     return () => sub.remove();
-  }, [router, qc, setPendingNotificationRoute]);
+  }, [router, setPendingNotificationRoute]);
 
   // ── Cold-start notification: also check getLastNotificationResponseAsync ──
   // If the app was killed and the user tapped a notification, the listener

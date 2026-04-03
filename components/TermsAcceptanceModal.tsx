@@ -22,8 +22,8 @@ import C from '@/lib/colors';
 /** Bump this string whenever Terms or Privacy Policy require re-acceptance. */
 export const CURRENT_TERMS_VERSION = '2026-04-02';
 
-const TERMS_URL   = 'https://stayreel.app/terms';
-const PRIVACY_URL = 'https://stayreel.app/privacy';
+const TERMS_URL   = 'https://andrewmahran7.github.io/stayreel-legal/terms';
+const PRIVACY_URL = 'https://andrewmahran7.github.io/stayreel-legal/privacy';
 
 interface Props {
   visible: boolean;
