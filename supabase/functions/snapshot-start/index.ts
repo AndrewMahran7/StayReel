@@ -122,14 +122,14 @@ Deno.serve(async (req: Request) => {
     const _now = Date.now();
     await db
       .from("snapshot_jobs")
-      .update({ status: "failed", error: "Job stalled before making progress", updated_at: new Date(_now).toISOString() })
+      .update({ status: "failed", error: "Job stalled before making progress", failure_code: "JOB_STALLED", updated_at: new Date(_now).toISOString() })
       .eq("ig_account_id", igAccountId)
       .eq("status", "running")
       .eq("pages_done", 0)
       .lt("updated_at", new Date(_now - 10 * 60_000).toISOString());
     await db
       .from("snapshot_jobs")
-      .update({ status: "failed", error: "Job abandoned (no updates for 2 h)", updated_at: new Date(_now).toISOString() })
+      .update({ status: "failed", error: "Job abandoned (no updates for 2 h)", failure_code: "JOB_ABANDONED", updated_at: new Date(_now).toISOString() })
       .eq("ig_account_id", igAccountId)
       .eq("status", "running")
       .lt("updated_at", new Date(_now - 2 * 60 * 60_000).toISOString());
@@ -231,6 +231,8 @@ Deno.serve(async (req: Request) => {
         is_first_snapshot:   isFirstSnapshot,
         // Telemetry: wall-clock job start time used for ETA estimation
         started_at:          capturedAt,
+        // Locking: initial heartbeat so process-stale-jobs can detect abandonment
+        last_heartbeat_at:   capturedAt,
       })
       .select("*")
       .single();

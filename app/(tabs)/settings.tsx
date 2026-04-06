@@ -21,9 +21,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useRouter } from 'expo-router';
 import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/store/authStore';
-import { useAdStore } from '@/store/adStore';
 import { useSubscriptionStore } from '@/store/subscriptionStore';
-import { RemoveAdsSheet } from '@/components/RemoveAdsSheet';
 import { PaywallModal } from '@/components/PaywallModal';
 import { unregisterPushToken } from '@/lib/notifications';
 import { showCustomerCenter, restorePurchases, isProFromInfo } from '@/lib/revenueCat';
@@ -37,14 +35,11 @@ import C from '@/lib/colors';
 export default function SettingsScreen() {
   const router = useRouter();
   const { user, igAccountId, setSession, setIgAccountId } = useAuthStore();
-  const { adsRemovedUntil } = useAdStore();
-  const adsActive = !adsRemovedUntil || Date.now() >= adsRemovedUntil;
   const qc = useQueryClient();
 
   const [disconnecting, setDisconnecting] = useState(false);
   const [deleting,      setDeleting]      = useState(false);
   const [restoring,    setRestoring]      = useState(false);
-  const [showRemoveAds, setShowRemoveAds] = useState(false);
   const [showPaywall, setShowPaywall] = useState(false);
   const [showSchoolPicker, setShowSchoolPicker] = useState(false);
   const [showReferralModal, setShowReferralModal] = useState(false);
@@ -53,18 +48,11 @@ export default function SettingsScreen() {
 
   // Subscription
   const isPro  = useSubscriptionStore((s) => s.isPro);
-  const status = useSubscriptionStore((s) => s.status);
-  const expiresAt = useSubscriptionStore((s) => s.expiresAt);
-  const promoUntil = useSubscriptionStore((s) => s.promoUntil);
+  const plan   = useSubscriptionStore((s) => s.effectivePlan());
 
-  const planLabel = isPro
-    ? promoUntil
-      ? 'Pro (promo)'
-      : status === 'trial' ? 'Free Trial' : 'Pro'
-    : 'Free';
-
+  const planLabel  = plan.planLabel;
   const expiryLabel = (() => {
-    const dateStr = promoUntil ?? expiresAt;
+    const dateStr = plan.expiresAt;
     if (!dateStr) return null;
     return new Date(dateStr).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
   })();
@@ -102,13 +90,15 @@ export default function SettingsScreen() {
         referredBy: data?.referred_by ?? null,
         skipped: data?.referral_source === '__skipped__',
       };
-      console.log('[Settings:referral] query result:', {
-        currentUserId: user!.id,
-        referred_by: result.referredBy,
-        referral_source: data?.referral_source ?? null,
-        hasReferral: result.referredBy !== null,
-        hasSkippedReferral: result.skipped,
-      });
+      if (__DEV__) {
+        console.log('[Settings:referral] query result:', {
+          currentUserId: user!.id,
+          referred_by: result.referredBy,
+          referral_source: data?.referral_source ?? null,
+          hasReferral: result.referredBy !== null,
+          hasSkippedReferral: result.skipped,
+        });
+      }
       return result;
     },
   });
@@ -120,14 +110,16 @@ export default function SettingsScreen() {
   const showReferralRow        = hasReferral || hasSkippedReferral;
   const isSettingsReferralOpen = showReferralModal;
 
-  console.log('[Settings:referral] visibility:', {
-    currentUserId:              user?.id ?? 'none',
-    hasReferral,
-    hasSkippedReferral,
-    shouldShowSettingsReferralEntry: !hasReferral && hasSkippedReferral,
-    isSettingsReferralOpen,
-    showReferralRow,
-  });
+  if (__DEV__) {
+    console.log('[Settings:referral] visibility:', {
+      currentUserId:              user?.id ?? 'none',
+      hasReferral,
+      hasSkippedReferral,
+      shouldShowSettingsReferralEntry: !hasReferral && hasSkippedReferral,
+      isSettingsReferralOpen,
+      showReferralRow,
+    });
+  }
 
   const toggleNotif = (key: keyof NotificationPrefs) => {
     updateNotifPref({ [key]: !notifPrefs[key] }).catch(() =>
@@ -206,12 +198,6 @@ export default function SettingsScreen() {
     qc.clear();
   };
 
-  const adsRemovedLabel = (() => {
-    if (!adsRemovedUntil || Date.now() >= adsRemovedUntil) return null;
-    const d = new Date(adsRemovedUntil);
-    return `Expires ${d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}`;
-  })();
-
   return (
     <SafeAreaView style={styles.safe}>
       <ScrollView contentContainerStyle={styles.scroll}>
@@ -286,7 +272,7 @@ export default function SettingsScreen() {
           <SettingRow
             icon="calendar-outline"
             iconColor={C.textSecondary}
-            title={promoUntil ? 'Promo expires' : status === 'trial' ? 'Trial ends' : 'Renews'}
+            title={plan.source === 'promo' ? 'Promo expires' : plan.source === 'trial' ? 'Trial ends' : 'Renews'}
             value={expiryLabel}
           />
         )}
@@ -404,28 +390,6 @@ export default function SettingsScreen() {
           disabled
         />
 
-        {/* Ads section */}
-        <SectionHeader title="Ads" />
-
-        {adsActive && (
-          <ActionRow
-            icon="gift-outline"
-            iconColor={C.green}
-            title="Remove ads for 7 days"
-            subtitle="Watch a short video — free"
-            onPress={() => setShowRemoveAds(true)}
-          />
-        )}
-
-        {adsRemovedLabel && (
-          <SettingRow
-            icon="checkmark-circle"
-            iconColor={C.green}
-            title="Ads removed"
-            value={adsRemovedLabel}
-          />
-        )}
-
         {/* Privacy section */}
         <SectionHeader title="Privacy" />
 
@@ -483,7 +447,6 @@ export default function SettingsScreen() {
         <Text style={styles.version}>StayReel v1.0.0</Text>
       </ScrollView>
 
-      <RemoveAdsSheet visible={showRemoveAds} onClose={() => setShowRemoveAds(false)} />
       <PaywallModal visible={showPaywall} onClose={() => setShowPaywall(false)} />
       <SchoolPickerModal
         visible={showSchoolPicker}

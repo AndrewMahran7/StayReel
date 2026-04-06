@@ -163,6 +163,12 @@ export interface SnapshotJobRow {
   started_at: string | null;
   completed_at: string | null;
   total_duration_ms: number | null;
+  // Lifecycle fields (024_snapshot_job_lifecycle)
+  failure_code: string | null;
+  // Locking fields (025_snapshot_job_locking)
+  locked_by: string | null;
+  lock_acquired_at: string | null;
+  last_heartbeat_at: string | null;
 }
 
 export interface ChunkResult {
@@ -193,6 +199,104 @@ export interface ChunkResult {
   partialNotFollowingBackPreview: Array<{ig_id: string; username: string}>;
   /** True once the followers phase is fully complete and the following scan has begun. */
   partialResultsReady: boolean;
+}
+
+// ── Job locking ────────────────────────────────────────────────────────────
+// Prevents the client poll loop and the stale-job worker from running
+// `runSnapshotChunk` concurrently for the same job.
+//
+// Lock semantics:
+//   • claimJobLock sets locked_by + lock_acquired_at + last_heartbeat_at
+//     using an atomic UPDATE … WHERE locked_by IS NULL (or lease expired).
+//   • releaseJobLock clears locked_by + lock_acquired_at.
+//   • updateHeartbeat touches last_heartbeat_at (and updated_at for compat).
+//
+// Lease duration: 120 s. If a processor crashes mid-chunk without releasing
+// the lock, the stale-job worker can override it after the lease expires.
+
+const LOCK_LEASE_MS = 120_000; // 2 minutes
+
+/**
+ * Atomically acquire the processing lock for a job.
+ * Returns true if the lock was successfully acquired, false otherwise.
+ *
+ * A lock can be acquired when:
+ *   - locked_by IS NULL (no one holds it), or
+ *   - lock_acquired_at is older than LOCK_LEASE_MS (lease expired)
+ *
+ * @param lockerIdentity  A string identifying the caller, e.g. "client" or "worker:abc123"
+ */
+// deno-lint-ignore no-explicit-any
+export async function claimJobLock(db: any, jobId: string, lockerIdentity: string): Promise<boolean> {
+  const now = new Date().toISOString();
+  const leaseExpiry = new Date(Date.now() - LOCK_LEASE_MS).toISOString();
+
+  // Attempt 1: lock is free (locked_by IS NULL)
+  const { data: claimed } = await db
+    .from("snapshot_jobs")
+    .update({
+      locked_by:         lockerIdentity,
+      lock_acquired_at:  now,
+      last_heartbeat_at: now,
+      updated_at:        now,
+    })
+    .eq("id", jobId)
+    .eq("status", "running")
+    .is("locked_by", null)
+    .select("id")
+    .maybeSingle();
+
+  if (claimed) return true;
+
+  // Attempt 2: lease expired (lock_acquired_at older than threshold)
+  const { data: overridden } = await db
+    .from("snapshot_jobs")
+    .update({
+      locked_by:         lockerIdentity,
+      lock_acquired_at:  now,
+      last_heartbeat_at: now,
+      updated_at:        now,
+    })
+    .eq("id", jobId)
+    .eq("status", "running")
+    .lt("lock_acquired_at", leaseExpiry)
+    .select("id")
+    .maybeSingle();
+
+  if (overridden) {
+    console.log(`[lock] ${lockerIdentity} overrode expired lock on job ${jobId}`);
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * Release the processing lock. Only the holder should release it.
+ */
+// deno-lint-ignore no-explicit-any
+export async function releaseJobLock(db: any, jobId: string, lockerIdentity: string): Promise<void> {
+  await db
+    .from("snapshot_jobs")
+    .update({
+      locked_by:        null,
+      lock_acquired_at: null,
+      updated_at:       new Date().toISOString(),
+    })
+    .eq("id", jobId)
+    .eq("locked_by", lockerIdentity);
+}
+
+/**
+ * Update the heartbeat timestamp to prove the processor is alive.
+ */
+// deno-lint-ignore no-explicit-any
+export async function updateHeartbeat(db: any, jobId: string): Promise<void> {
+  const now = new Date().toISOString();
+  await db
+    .from("snapshot_jobs")
+    .update({ last_heartbeat_at: now, updated_at: now })
+    .eq("id", jobId);
 }
 
 // ── Main worker ────────────────────────────────────────────────────────────
@@ -269,7 +373,7 @@ export async function runSnapshotChunk(
     if (result.stopReason && result.stopReason !== "PAGE_LIMIT_REACHED") {
       // Fatal Instagram error — fail the job
       const mode = FAILURE_MODES[result.stopReason];
-      await failJob(db, job.id, mode?.uiMessage ?? result.stopReason, job.started_at);
+      await failJob(db, job.id, mode?.uiMessage ?? result.stopReason, job.started_at, result.stopReason);
       return mk("failed", phase, pagesDone, followers.length, following.length, true, mode?.uiMessage ?? result.stopReason);
     }
 
@@ -339,7 +443,7 @@ export async function runSnapshotChunk(
 
       if (result.stopReason && result.stopReason !== "PAGE_LIMIT_REACHED") {
         const mode = FAILURE_MODES[result.stopReason];
-        await failJob(db, job.id, mode?.uiMessage ?? result.stopReason, job.started_at);
+        await failJob(db, job.id, mode?.uiMessage ?? result.stopReason, job.started_at, result.stopReason);
         return mk("failed", phase, pagesDone, followers.length, following.length, true, mode?.uiMessage ?? result.stopReason);
       }
 
@@ -557,7 +661,7 @@ export async function runSnapshotChunk(
             profile.push_token,
             "Snapshot Ready \uD83D\uDCF8",
             body,
-            { screen: "dashboard" },
+            { screen: "dashboard", jobId: job.id, igAccountId: job.ig_account_id },
           );
           console.log(`[job ${job.id}] push notification sent.`);
         }
@@ -571,7 +675,7 @@ export async function runSnapshotChunk(
 
     } catch (err) {
       const msg = (err as Error).message ?? "Finalization error";
-      await failJob(db, job.id, msg, job.started_at);
+      await failJob(db, job.id, msg, job.started_at, "FINALIZE_ERROR");
       return mk("failed", "finalize", pagesDone, followers.length, following.length, true, msg);
     }
   }
@@ -583,12 +687,13 @@ export async function runSnapshotChunk(
 // ── Helpers ────────────────────────────────────────────────────────────────
 
 // deno-lint-ignore no-explicit-any
-async function failJob(db: any, jobId: string, error: string, startedAt?: string | null): Promise<void> {
+async function failJob(db: any, jobId: string, error: string, startedAt?: string | null, failureCode?: string): Promise<void> {
   const failedAt = new Date().toISOString();
   const totalDurationMs = startedAt ? Date.now() - new Date(startedAt).getTime() : null;
   await db.from("snapshot_jobs").update({
     status:            "failed",
     error,
+    failure_code:      failureCode ?? null,
     completed_at:      failedAt,
     total_duration_ms: totalDurationMs,
     updated_at:        failedAt,

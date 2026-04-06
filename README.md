@@ -35,7 +35,6 @@ Track who followed you, who unfollowed you, and who doesn't follow back — with
 | Global state | Zustand v5 |
 | Backend | Supabase (Auth, Postgres, Edge Functions, Vault) |
 | Edge runtime | Deno (Supabase Edge Functions) |
-| Ads | react-native-google-mobile-ads |
 | Build/deploy | EAS Build + EAS Submit |
 
 ---
@@ -227,16 +226,7 @@ supabase secrets set SUPABASE_SERVICE_ROLE_KEY=<key>
 
 ## Ad Setup
 
-1. Create an AdMob account and an app entry for iOS and Android.
-2. Copy the App IDs into `app.json` under the `react-native-google-mobile-ads` plugin.
-3. Create three ad units (Banner, Interstitial, Rewarded) and paste the IDs into `lib/adUnits.ts`.
-
-| Event | Ad shown |
-|---|---|
-| Dashboard / Lists screen | Banner (top, anchored) |
-| Every 3rd list-tab switch | Interstitial |
-| After a successful snapshot | Interstitial (if ready) |
-| Settings → "Remove ads for 7 days" | Rewarded → 7-day ad-free period |
+> Ads are disabled. All ad-related code, dependencies, and config have been removed.
 
 ---
 
@@ -247,8 +237,7 @@ supabase secrets set SUPABASE_SERVICE_ROLE_KEY=<key>
 - **1-hour cooldown** — one manual snapshot per hour per account to protect the user's Instagram account.
 - **ig_id matching** — users who rename their Instagram handle are not counted as lost + new followers.
 - **30-day TTL on raw lists** — raw follower JSON is nulled by pg_cron after 30 days; diff results are kept indefinitely.
-- **Consent first** — `ConsentModal` blocks ad initialisation until the user makes an explicit choice.
-- **Mini-game over ads** — the Tap the Dot game is shown during snapshot loading as a user-respecting alternative to interstitial ads.
+- **Mini-game engagement** — the Tap the Dot game is shown during snapshot loading to keep users engaged.
 
 ---
 

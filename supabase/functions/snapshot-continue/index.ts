@@ -17,7 +17,7 @@ import { errorResponse, Errors }               from "../_shared/errors.ts";
 import { requireAuth }                          from "../_shared/auth.ts";
 import { adminClient }                          from "../_shared/supabase_client.ts";
 import { vaultRetrieve }                        from "../_shared/vault.ts";
-import { runSnapshotChunk, SnapshotJobRow }     from "../_shared/snapshotJob.ts";
+import { runSnapshotChunk, SnapshotJobRow, claimJobLock, releaseJobLock, updateHeartbeat } from "../_shared/snapshotJob.ts";
 import { notifyOwnerOfError }                  from "../_shared/notify.ts";
 import { countRunningJobs, MAX_CONCURRENT_JOBS, tryPromoteQueuedJob } from "../_shared/rate_limit.ts";
 
@@ -128,8 +128,44 @@ Deno.serve(async (req: Request) => {
     const cookie = await vaultRetrieve(acct.vault_secret_id);
     const igUserId = acct.ig_user_id;
 
-    // ── 7. Run next chunk ─────────────────────────────────────
-    const result = await runSnapshotChunk(job, cookie, igUserId);
+    // ── 7. Acquire lock + heartbeat ──────────────────────────────
+    // Update the heartbeat on every poll to prove the client is alive.
+    // The stale-job worker uses last_heartbeat_at to decide whether to
+    // take over a job.
+    await updateHeartbeat(db, job.id);
+
+    const lockAcquired = await claimJobLock(db, job.id, "client");
+    if (!lockAcquired) {
+      // Another processor (stale-job worker) is currently running a
+      // chunk for this job. The heartbeat update above is enough to
+      // signal the client is still alive. Return current state and
+      // let the poll loop retry on the next cycle.
+      console.log(`[snapshot-continue] Job ${job.id} locked by another processor, skipping chunk.`);
+      return jsonResponse({
+        jobId:            job.id,
+        status:           job.status,
+        phase:            job.phase,
+        pagesDone:        job.pages_done,
+        followersSeen:    (job.followers_json as unknown[]).length,
+        followingSeen:    (job.following_json as unknown[]).length,
+        followerCountApi: job.follower_count_api,
+        followingCountApi:job.following_count_api,
+        done:             false,
+        message:          "Processing\u2026",
+        etaMs:            null,
+        isFirstSnapshot:  job.is_first_snapshot,
+      });
+    }
+
+    // ── 8. Run next chunk ─────────────────────────────────────
+    let result;
+    try {
+      result = await runSnapshotChunk(job, cookie, igUserId);
+    } finally {
+      // Always release the lock after chunk processing, whether it
+      // succeeded or failed. The next poll will re-acquire it.
+      await releaseJobLock(db, job.id, "client").catch(() => {});
+    }
 
     // Mark IG account suspended if session died mid-job
     if (result.status === 'failed' && result.message &&

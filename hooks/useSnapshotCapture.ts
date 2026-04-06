@@ -4,6 +4,7 @@
 // Exposes nextAllowedAt when a SNAPSHOT_LIMIT error is returned.
 
 import { useState, useRef, useCallback, useEffect } from 'react';
+import { AppState }                      from 'react-native';
 import { useQueryClient }                from '@tanstack/react-query';
 import { supabase }                      from '@/lib/supabase';
 import { useAuthStore }                  from '@/store/authStore';
@@ -11,6 +12,7 @@ import {
   setSuppressSnapshotPush,
   registerForPushNotifications,
 } from '@/lib/notifications';
+import { setActiveJob, clearActiveJob }  from '@/lib/snapshotJobStore';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -281,6 +283,15 @@ export function useSnapshotCapture() {
       const first = await startJob(igAccountId);
       if (first.followingCached) runFollowingCached = true;
       if (first.resumed) wasResumed = true;
+
+      // Persist the active job so reconciliation can find it after
+      // backgrounding, kill, or relaunch.
+      setActiveJob({
+        jobId:           first.jobId,
+        igAccountId,
+        lastKnownStatus: first.status === 'queued' ? 'queued' : 'running',
+        startedAt:       new Date().toISOString(),
+      }).catch(() => {});
       setProgress({
         phase:           first.phase,
         pagesDone:       first.pagesDone,
@@ -333,6 +344,16 @@ export function useSnapshotCapture() {
           });
         } catch (pollErr) {
           retries++;
+          // When the app is backgrounded, network calls are expected to
+          // fail (iOS suspends networking after ~30s). Don't burn retries
+          // — just wait and try again when the app foregrounds. The server
+          // continues the job via process-stale-jobs.
+          if (AppState.currentState !== 'active') {
+            retries--; // undo the increment — don't count background failures
+            console.log('[snapshot] poll error while app inactive, waiting 5s before retry');
+            await delay(5_000);
+            continue;
+          }
           console.warn(`[snapshot] poll retry ${retries}/${MAX_RETRIES}:`, (pollErr as Error).message);
           if (retries >= MAX_RETRIES) throw pollErr;
           // Exponential backoff: 3s, 6s, 12s, 24s, ...
@@ -357,6 +378,9 @@ export function useSnapshotCapture() {
       throw e;
     } finally {
       setIsPending(false);
+      // Clear the persisted active job — reconciliation no longer needed.
+      clearActiveJob().catch(() => {});
+
       // Refresh data regardless of outcome
       qc.invalidateQueries({ queryKey: ['dashboard'] });
       qc.invalidateQueries({ queryKey: ['list'] });
@@ -376,6 +400,10 @@ export function useSnapshotCapture() {
   const cancel = useCallback(() => { cancelled.current = true; }, []);
   const clearError = useCallback(() => setError(null), []);
 
+  /** Allow external callers (e.g. reconciliation) to set an error so
+   *  SnapshotErrorCard shows the correct server-side failure. */
+  const setExternalError = useCallback((err: Error) => setError(err), []);
+
   return {
     isPending,
     error,
@@ -388,6 +416,7 @@ export function useSnapshotCapture() {
     },
     cancel,
     clearError,
+    setExternalError,
   };
 }
 
@@ -439,6 +468,11 @@ function inferCodeFromMessage(msg: string): string {
   if (m.includes('CHALLENGE_REQUIRED') || m.includes('CHECKPOINT_REQUIRED')) return 'CHALLENGE_REQUIRED';
   if (m.includes('IG_RATE_LIMITED') || m.includes('RATE') || m.includes('THROTTL')) return 'IG_RATE_LIMITED';
   if (m.includes('SUSPICIOUS')) return 'SUSPICIOUS_RESPONSE';
+  // Network / connectivity errors should NOT map to INTERNAL_ERROR.
+  // These indicate the client lost connection, not a server failure.
+  if (m.includes('NETWORK') || m.includes('ABORT') || m.includes('TIMEOUT') ||
+      m.includes('INTERNET') || m.includes('OFFLINE') || m.includes('FETCH') ||
+      m.includes('ECONNREFUSED') || m.includes('ENOTFOUND')) return 'NETWORK_ERROR';
   return 'INTERNAL_ERROR';
 }
 

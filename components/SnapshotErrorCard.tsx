@@ -152,6 +152,21 @@ const PROFILES: Record<string, ErrorProfile> = {
     needsSignOut:   false,
     isKnown:        true,
   },
+  NETWORK_ERROR: {
+    icon:    'cloud-offline-outline',
+    color:   C.teal,
+    bgColor: C.tealDim,
+    title:   'Connection lost during snapshot',
+    body:    'Your snapshot is still running on the server. When you return or refresh, your results will be ready.',
+    steps: [
+      'Check your internet connection.',
+      'Pull down to refresh — your snapshot may already be finished.',
+      'If you just reopened the app, your results should appear shortly.',
+    ],
+    needsReconnect: false,
+    needsSignOut:   false,
+    isKnown:        true,
+  },
 };
 
 const UNKNOWN_PROFILE: ErrorProfile = {

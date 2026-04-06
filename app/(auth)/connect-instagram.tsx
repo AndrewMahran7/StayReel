@@ -43,7 +43,11 @@ export default function ConnectInstagramScreen() {
   const [webviewKey, setWebviewKey]   = useState(0);
   const [loggedIn, setLoggedIn]       = useState(false); // feed is visible
   const hasSubmitted = useRef(false);
-  const [showTerms, setShowTerms]     = useState(!termsAccepted);
+
+  // Derive terms modal visibility from the live store value.
+  // Previously useState(!termsAccepted) captured a stale default at mount,
+  // causing returning users to get re-prompted after bootstrap hydration.
+  const showTerms = !termsAccepted;
 
   // Track whether the user has left the login page
   const onNavigationStateChange = useCallback((nav: any) => {
@@ -55,26 +59,37 @@ export default function ConnectInstagramScreen() {
     }
   }, []);
 
-  // User taps "Connect this account" — read cookie then submit
+  // User taps "Connect this account" — read cookie with retry then submit
   const handleConnect = useCallback(async () => {
     if (hasSubmitted.current || submitting) return;
     try {
-      // Small delay — Android WebView persists cookies asynchronously
-      await new Promise(resolve => setTimeout(resolve, 600));
+      // Bounded retry loop: some devices persist WebView cookies
+      // asynchronously. Retry up to 5 times with 500ms intervals
+      // (total max wait: ~2.5s) before giving up.
+      const MAX_ATTEMPTS = 5;
+      const DELAY_MS = 500;
+      let sessionId: string | undefined;
+      let csrfToken = '';
 
-      const cookies = await CookieManager.get('https://www.instagram.com', true);
-      const sessionId = cookies['sessionid']?.value;
+      for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+        await new Promise(resolve => setTimeout(resolve, DELAY_MS));
+        const cookies = await CookieManager.get('https://www.instagram.com', true);
+        sessionId = cookies['sessionid']?.value;
+        if (sessionId) {
+          csrfToken = cookies['csrftoken']?.value ?? '';
+          break;
+        }
+      }
 
       if (!sessionId) {
         Alert.alert(
-          'Cookie not found',
-          'Could not read the Instagram session cookie. Try scrolling the feed for a moment then tap Connect again.',
+          'Session not ready yet',
+          'Instagram is still saving your login. Please scroll through the feed for a few seconds, then tap Connect again.',
         );
         return;
       }
 
       hasSubmitted.current = true;
-      const csrfToken = cookies['csrftoken']?.value ?? '';
       const sessionCookie = `sessionid=${sessionId}${csrfToken ? `; csrftoken=${csrfToken}` : ''}`;
       await submitCookie(sessionCookie);
     } catch {
@@ -144,7 +159,7 @@ export default function ConnectInstagramScreen() {
       {/* Terms acceptance gate — must accept before connecting IG */}
       <TermsAcceptanceModal
         visible={showTerms}
-        onAccepted={() => setShowTerms(false)}
+        onAccepted={() => { /* store is updated inside the modal */ }}
       />
 
       {/* Header */}

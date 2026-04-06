@@ -2,8 +2,8 @@
   "expo": {
     "name": "StayReel",
     "slug": "stayreel",
-    "version": "1.4.2",
-    "runtimeVersion": "1.4.2",
+    "version": "1.5.1",
+    "runtimeVersion": "1.5.1",
     "updates": {
       "url": "https://u.expo.dev/7a24a73a-5ba3-4aeb-866e-c285fb07327a",
       "enabled": true,
@@ -53,9 +53,7 @@
           ]
         }
       ],
-      "permissions": [
-        "com.google.android.gms.permission.AD_ID"
-      ]
+      "permissions": []
     },
     "platforms": [
       "ios",
@@ -65,14 +63,7 @@
       "expo-router",
       "expo-updates",
       "expo-secure-store",
-      "expo-notifications",
-      [
-        "react-native-google-mobile-ads",
-        {
-          "iosAppId": "ca-app-pub-6049273265076763~7693569711",
-          "androidAppId": "ca-app-pub-3940256099942544~3347511713"
-        }
-      ]
+      "expo-notifications"
     ],
     "experiments": {
       "typedRoutes": true

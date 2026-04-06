@@ -275,19 +275,9 @@ A complete inventory of every feature in the app, organized by area.
 
 ## 11. Ads
 
-**Banner ads**
-- Google Mobile Ads banner rendered at the top of the Dashboard and Lists screens.
-- GDPR/ATT consent handled via `ConsentModal` before ads are shown.
-
-**Interstitial ads**
-- Shown every 3 list opens (`INTERSTITIAL_EVERY_N_OPENS = 3`).
-- Frequency cap persisted to AsyncStorage so it survives app restarts.
-
-**Remove ads (rewarded)**
-- Users can watch a rewarded video ad to remove all ads for 7 days — free.
-- Available from Settings → "Remove ads for 7 days".
-- Expiry timestamp stored in AsyncStorage; ads resume automatically after 7 days.
-- Settings shows a countdown of when ads will return.
+> **Ads are disabled.** All ad-related code (banners, interstitials, rewarded ads,
+> consent modal, ad store) has been removed. The `react-native-google-mobile-ads`
+> dependency and AdMob plugin config have been stripped from the project.
 
 ---
 
@@ -333,10 +323,6 @@ A complete inventory of every feature in the app, organized by area.
 
 **Notifications section**
 - Per-type toggles for all notification categories
-
-**Ads section**
-- Remove ads for 7 days via rewarded video
-- Ads-removed countdown display
 
 **Privacy section**
 - Privacy Policy (opens browser)

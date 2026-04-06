@@ -29,7 +29,6 @@
     "react": "19.1.0",
     "react-dom": "19.1.0",
     "react-native": "0.81.5",
-    "react-native-google-mobile-ads": "^15.8.3",
     "react-native-purchases": "^9.14.0",
     "react-native-purchases-ui": "^9.14.0",
     "react-native-safe-area-context": "~5.6.0",

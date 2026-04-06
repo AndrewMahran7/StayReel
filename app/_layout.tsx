@@ -12,9 +12,9 @@ import { StatusBar } from 'expo-status-bar';
 import { supabase, handleAuthDeepLink } from '@/lib/supabase';
 import { queryClient } from '@/lib/queryClient';
 import { useAuthStore } from '@/store/authStore';
-import { useAdStore } from '@/store/adStore';
 import { useSubscriptionStore } from '@/store/subscriptionStore';
 import { clearSnapshot } from '@/lib/offlineStorage';
+import { clearActiveJob } from '@/lib/snapshotJobStore';
 import { useNotifications } from '@/hooks/useNotifications';
 
 function AuthGuard() {
@@ -67,27 +67,39 @@ function AuthGuard() {
 
 export default function RootLayout() {
   const { setSession, setInitialised, setIgAccountId, setTermsAccepted } = useAuthStore();
-  const { hydrate: hydrateAds } = useAdStore();
   const hydrateSub = useSubscriptionStore((s) => s.hydrate);
   const resetSub   = useSubscriptionStore((s) => s.reset);
 
   // Register push notifications + handle notification taps
   useNotifications();
 
-  // Bootstrap: load saved session + ad prefs
+  // Bootstrap: load saved session
   useEffect(() => {
-    hydrateAds();
 
-    // Safety timeout: ensure setInitialised() fires even if network hangs.
-    // This prevents an infinite loading screen from a hung getSession() or
-    // ig_accounts query. 15 s is generous but still catches real hangs.
+    // Safety timeout: last-resort backstop that fires setInitialised() if
+    // the entire bootstrap hangs. Each network call below has its own
+    // per-operation timeout so this should never fire in practice.
     let bootstrapDone = false;
     const safetyTimer = setTimeout(() => {
       if (!bootstrapDone) {
         console.warn('[Auth] Bootstrap safety timeout — forcing initialised');
         setInitialised();
       }
-    }, 15_000);
+    }, 5_000);
+
+    /** Race a promise against a timeout. Resolves with the fallback on timeout. */
+    function withTimeout<T>(promise: PromiseLike<T>, ms: number, fallback: T, label: string): Promise<T> {
+      let timer: ReturnType<typeof setTimeout>;
+      return Promise.race([
+        Promise.resolve(promise),
+        new Promise<T>((resolve) => {
+          timer = setTimeout(() => {
+            console.warn(`[Auth] ${label} timed out (${ms}ms)`);
+            resolve(fallback);
+          }, ms);
+        }),
+      ]).finally(() => clearTimeout(timer!));
+    }
 
     // Wrap the whole bootstrap in try/finally so setInitialised() is
     // always called even if the ig_accounts query or getSession() throws.
@@ -96,18 +108,21 @@ export default function RootLayout() {
         // ── Step 1: Handle incoming deep link (magic-link callback) ──
         // Process BEFORE reading the stored session so a fresh PKCE code
         // exchange is reflected in the getSession() call that follows.
-        // Race with a 10 s timeout so a slow network can't hang bootstrap.
+        // Race with an 8 s timeout so a slow network can't hang bootstrap.
         const initialUrl = await Linking.getInitialURL();
         console.log('[Auth] Bootstrap — initial URL:', initialUrl ?? 'none');
 
         if (initialUrl) {
-          await Promise.race([
-            handleAuthDeepLink(initialUrl),
-            new Promise<void>((r) => setTimeout(r, 10_000)),
-          ]);
+          await withTimeout(
+            handleAuthDeepLink(initialUrl).then(() => {}),
+            8_000,
+            undefined,
+            'Deep link exchange',
+          );
         }
 
         // ── Step 2: Load current session ─────────────────────────────
+        // getSession() reads from AsyncStorage — no network, very fast.
         const { data: { session: storedSession } } = await supabase.auth.getSession();
         console.log(
           '[Auth] Bootstrap — stored session:',
@@ -125,22 +140,30 @@ export default function RootLayout() {
           const isExpiring = (expiresAt * 1_000 - Date.now()) < 60_000;
           if (isExpiring) {
             console.log('[Auth] Session expiring soon, refreshing…');
-            const { data: refreshed, error: refreshError } = await supabase.auth.refreshSession();
-            if (refreshError) {
+            // Per-operation timeout: 8s for token refresh (network call)
+            const refreshResult = await withTimeout(
+              supabase.auth.refreshSession(),
+              8_000,
+              { data: { session: null, user: null }, error: { message: 'Refresh timed out' } as any },
+              'Session refresh',
+            );
+
+            if (refreshResult.error) {
               // Stale / consumed refresh token — clear locally without a server
               // round-trip to avoid extra noise from the revocation endpoint.
               const isStale =
-                /refresh token/i.test(refreshError.message) ||
-                /not found/i.test(refreshError.message);
+                /refresh token/i.test(refreshResult.error.message) ||
+                /not found/i.test(refreshResult.error.message) ||
+                /timed out/i.test(refreshResult.error.message);
               if (isStale) {
-                console.log('[Auth] Refresh token expired, clearing local session');
+                console.log('[Auth] Refresh token expired or timed out, clearing local session');
               } else {
-                console.warn('[Auth] Refresh failed:', refreshError.message);
+                console.warn('[Auth] Refresh failed:', refreshResult.error.message);
               }
               await supabase.auth.signOut({ scope: 'local' });
               session = null;
             } else {
-              session = refreshed.session;
+              session = refreshResult.data.session;
               console.log('[Auth] Session refreshed successfully');
             }
           }
@@ -149,25 +172,40 @@ export default function RootLayout() {
         setSession(session);
 
         if (session?.user) {
-          const { data } = await supabase
-            .from('ig_accounts')
-            .select('id')
-            .eq('user_id', session.user.id)
-            .is('deleted_at', null)
-            .eq('status', 'active')
-            .limit(1)
-            .maybeSingle();
-          if (data?.id) setIgAccountId(data.id);
+          // ── Step 3: Fetch IG account (critical — gates AuthGuard routing) ──
+          // Per-operation timeout: 5s
+          const igResult = await withTimeout(
+            supabase
+              .from('ig_accounts')
+              .select('id')
+              .eq('user_id', session.user.id)
+              .is('deleted_at', null)
+              .eq('status', 'active')
+              .limit(1)
+              .maybeSingle(),
+            5_000,
+            { data: null, error: null, count: null, status: 408, statusText: 'Timeout' } as any,
+            'ig_accounts query',
+          );
+          if (igResult.data?.id) setIgAccountId(igResult.data.id);
 
-          // Hydrate terms acceptance status
-          const { data: profile } = await supabase
-            .from('profiles')
-            .select('terms_accepted_at')
-            .eq('id', session.user.id)
-            .maybeSingle();
-          if (profile?.terms_accepted_at) setTermsAccepted(true);
+          // ── Step 4: Non-critical hydration (fire-and-forget) ──
+          // Terms acceptance + subscription state don't need to block
+          // the loading screen. Hydrate them in parallel after render.
+          Promise.resolve(
+            supabase
+              .from('profiles')
+              .select('terms_accepted_at')
+              .eq('id', session.user.id)
+              .maybeSingle(),
+          )
+            .then(({ data: profile }) => {
+              if (profile?.terms_accepted_at) setTermsAccepted(true);
+            })
+            .catch((err: Error) =>
+              console.warn('[Auth] Terms hydrate error:', err.message),
+            );
 
-          // Hydrate subscription state (RevenueCat + Supabase profile)
           hydrateSub(session.user.id).catch((err: Error) =>
             console.warn('[Auth] Subscription hydrate error:', err.message),
           );
@@ -192,6 +230,7 @@ export default function RootLayout() {
           setIgAccountId(null);
           resetSub();
           clearSnapshot(); // Wipe cached snapshot on sign-out
+          clearActiveJob(); // Clear persisted snapshot job on sign-out
         } else if (
           event === 'SIGNED_IN' ||
           event === 'TOKEN_REFRESHED' ||
@@ -207,7 +246,7 @@ export default function RootLayout() {
           } else {
             // Re-fetch igAccountId so AuthGuard doesn't redirect a freshly
             // signed-in user to /connect-instagram when they already have an
-            // account linked.  Timeout after 10s so a hung Supabase query
+            // account linked.  Timeout after 5s so a hung Supabase query
             // doesn't leave the user stuck on the wrong screen.
             const queryPromise = supabase
               .from('ig_accounts')
@@ -222,9 +261,9 @@ export default function RootLayout() {
               queryPromise,
               new Promise<{ data: null }>((resolve) =>
                 setTimeout(() => {
-                  console.warn('[Auth] ig_accounts query timed out (10s)');
+                  console.warn('[Auth] ig_accounts query timed out (5s)');
                   resolve({ data: null });
-                }, 10_000),
+                }, 5_000),
               ),
             ]);
             setIgAccountId(result.data?.id ?? null);

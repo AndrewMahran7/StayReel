@@ -127,14 +127,17 @@ export function useReferralPrompt() {
 
   const shouldShow = !dismissedRef.current && query.data === true;
 
-  // Debug logging — fires on every render but is cheap
-  console.log('[Referral:prompt]', {
-    shouldShow,
-    dismissedThisSession: dismissedRef.current,
-    queryData: query.data,
-    mountRender: mountCount.current,
-    userId: userId ?? 'none',
-  });
+  // Debug logging — fires on every render; gate behind __DEV__ to avoid
+  // spamming release-build logs and causing minor perf overhead.
+  if (__DEV__) {
+    console.log('[Referral:prompt]', {
+      shouldShow,
+      dismissedThisSession: dismissedRef.current,
+      queryData: query.data,
+      mountRender: mountCount.current,
+      userId: userId ?? 'none',
+    });
+  }
 
   // Auto-apply stashed code from AsyncStorage (pre-signup flow)
   useEffect(() => {

@@ -22,7 +22,6 @@ import { useSubscriptionStore } from '@/store/subscriptionStore';
 // import { useUnfollowUser }      from '@/hooks/useUnfollowUser';
 import { SearchBar }            from '@/components/SearchBar';
 import { UserListItem }         from '@/components/UserListItem';
-import { BannerAdView }         from '@/components/BannerAdView';
 import { LockedUserRow }        from '@/components/LockedUserRow';
 import { PaywallModal }         from '@/components/PaywallModal';
 import { trackEvent }           from '@/lib/analytics';
@@ -209,7 +208,6 @@ export default function ListsScreen() {
 
   return (
     <SafeAreaView style={styles.safe}>
-      <BannerAdView />
 
       {/* Screen title */}
       <View style={styles.titleRow}>

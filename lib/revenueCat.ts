@@ -199,6 +199,17 @@ export async function hasProEntitlement(): Promise<boolean> {
 }
 
 /**
+ * Returns the active entitlement's product identifier (e.g. "stayreel_pro_monthly")
+ * or null if no active subscription exists.
+ */
+export async function getActiveProductId(): Promise<string | null> {
+  const info = await getCustomerInfo();
+  if (!info) return null;
+  const ent = info.entitlements.active[ENTITLEMENT_ID];
+  return ent?.productIdentifier ?? null;
+}
+
+/**
  * Extracts pro status from a CustomerInfo object (avoids extra API call).
  */
 export function isProFromInfo(info: CustomerInfo): boolean {

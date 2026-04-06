@@ -21,7 +21,7 @@ StayReel is an Instagram follower-tracking app. Users connect their Instagram ac
 | `snapshot_quota` | Per-user daily quota counter (legacy; superseded by 1-hour cooldown) |
 | `snapshot_jobs` | Resumable chunked job state (cursor, phase, accumulated JSON) |
 | `audit_events` | Immutable log of every significant event |
-| `user_settings` | Per-user preferences (consent, ads removed, `notify_weekly_summary`, `notify_refresh_complete`) |
+| `user_settings` | Per-user preferences (`notify_weekly_summary`, `notify_refresh_complete`) |
 
 Row Level Security is enabled on every table. All Edge Functions use the service-role `adminClient` internally.
 
@@ -69,15 +69,13 @@ app/
                            live progress card + "Tap the Dot" mini-game,
                            paywall gate, school attribution prompt
     lists.tsx             searchable, paginated user list (5 tab types)
-    settings.tsx          disconnect IG, delete data, remove-ads, consent,
+    settings.tsx          disconnect IG, delete data,
                            subscription section, notification toggles, school picker
 
 components/
   DashboardCard.tsx       stat card (left-accent border, icon, count, chevron)
   UserListItem.tsx        avatar (unavatar.io) + @username
-  BannerAdView.tsx        AdMob banner (respects consent + remove-ads state)
-  ConsentModal.tsx        GDPR/ATT consent sheet
-  RemoveAdsSheet.tsx      remove-ads reward flow
+  BannerAdView.tsx        no-op stub (ads disabled)
   PaywallModal.tsx        RevenueCat paywall with yearly/monthly plans
   SchoolPickerModal.tsx   school / university picker for ambassador tracking
   SearchBar.tsx
@@ -94,8 +92,6 @@ hooks/
   useSnapshotCapture.ts   start job → poll snapshot-continue → done
   useSnapshotHistory.ts   historical counts for GrowthChart
   useTapDotHighScore.ts   AsyncStorage high-score for mini-game
-  useInterstitialAd.ts    frequency-capped interstitial
-  useRewardedAd.ts        rewarded ad for remove-ads flow
   useNotifications.ts     boot-time token re-registration + tap handling
   useNotificationSettings.ts  per-toggle notification prefs (React Query)
   useSchoolPrompt.ts      auto-prompt logic for school picker
@@ -108,7 +104,6 @@ lib/
 
 store/
   authStore.ts            user session + igAccountId (Zustand + AsyncStorage)
-  adStore.ts              consent state, ads-removed expiry, list-open counter
   subscriptionStore.ts    subscription status + free-snapshot tracking (Zustand)
 ```
 

@@ -9,6 +9,7 @@ import { supabase } from '@/lib/supabase';
 import {
   configureRevenueCat,
   hasProEntitlement,
+  getActiveProductId,
   ENTITLEMENT_ID,
   isProFromInfo,
   isRevenueCatConfigured,
@@ -50,6 +51,14 @@ function promoErrorMessage(code: string): string {
 
 // ── Types ──────────────────────────────────────────────────────
 export type SubStatus = 'free' | 'trial' | 'active' | 'expired' | 'cancelled';
+export type PlanSource = 'monthly' | 'annual' | 'trial' | 'promo' | 'free';
+
+export interface EffectivePlan {
+  hasProAccess: boolean;
+  source:       PlanSource;
+  planLabel:    string;
+  expiresAt:    string | null;
+}
 
 export interface SubscriptionState {
   // Status
@@ -60,12 +69,18 @@ export interface SubscriptionState {
   // Promo access (server-managed, separate from RC subscriptions)
   promoUntil:         string | null;
 
+  // RC product identifier (set from CustomerInfo when available)
+  rcProductId:        string | null;
+
   // Free snapshot tracking
   freeSnapshotsUsed:  number;
   freeSnapshotLimit:  number;
 
   // Hydration
   hydrated:           boolean;
+
+  // Derived plan (unified source of truth for display + gating)
+  effectivePlan:      () => EffectivePlan;
 
   // Actions
   hydrate:            (userId: string) => Promise<void>;
@@ -85,10 +100,54 @@ export const useSubscriptionStore = create<SubscriptionState>()((set, get) => ({
   status:            'free',
   expiresAt:         null,
   promoUntil:        null,
+  rcProductId:       null,
   freeSnapshotsUsed: 0,
   freeSnapshotLimit: FREE_SNAPSHOT_LIMIT,
   hydrated:          false,
   _unsubListener:    null,
+
+  /**
+   * Derive the effective plan from current store state.
+   * Single source of truth for plan label, source, and gating.
+   */
+  effectivePlan(): EffectivePlan {
+    const { isPro, status, expiresAt, promoUntil, rcProductId } = get();
+
+    if (!isPro) {
+      return { hasProAccess: false, source: 'free', planLabel: 'Free', expiresAt: null };
+    }
+
+    // Paid RC subscription takes display priority over promo
+    if (rcProductId) {
+      const isAnnual = /annual|yearly|year/i.test(rcProductId);
+      const isTrial  = status === 'trial';
+      return {
+        hasProAccess: true,
+        source:       isTrial ? 'trial' : (isAnnual ? 'annual' : 'monthly'),
+        planLabel:    isTrial ? 'Free Trial' : (isAnnual ? 'Pro Annual' : 'Pro Monthly'),
+        expiresAt:    expiresAt,
+      };
+    }
+
+    // Active promo access
+    if (promoUntil) {
+      return {
+        hasProAccess: true,
+        source:       'promo',
+        planLabel:    'Pro (Promo)',
+        expiresAt:    promoUntil,
+      };
+    }
+
+    // DB-fallback active subscription (no RC product ID, no promo)
+    const isTrial = status === 'trial';
+    return {
+      hasProAccess: true,
+      source:       isTrial ? 'trial' : 'monthly',
+      planLabel:    isTrial ? 'Free Trial' : 'Pro',
+      expiresAt:    expiresAt,
+    };
+  },
 
   /**
    * Hydrate subscription state from Supabase profile + RevenueCat.
@@ -130,12 +189,18 @@ export const useSubscriptionStore = create<SubscriptionState>()((set, get) => ({
       const promoUntil = profile?.promo_until ?? null;
       const promoActive = promoUntil && new Date(promoUntil) > new Date();
 
+      // Fetch the RC product id for plan label resolution
+      let rcProduct: string | null = null;
+
       if (promoActive) {
         isPro = true;
         proSource = 'promo';
+        // Still grab the RC product so effectivePlan() can detect paid+promo overlap
+        if (rcReady) rcProduct = await getActiveProductId();
       } else if (rcReady) {
         isPro = await hasProEntitlement();
         proSource = isPro ? 'rc' : 'none';
+        if (isPro) rcProduct = await getActiveProductId();
       } else if (profile?.subscription_status === 'active' || profile?.subscription_status === 'trial') {
         // Fallback: trust the webhook-synced status in the DB.
         // Also verify expiry hasn't passed (mirrors server-side check).
@@ -156,6 +221,7 @@ export const useSubscriptionStore = create<SubscriptionState>()((set, get) => ({
 
       set({
         isPro,
+        rcProductId:       rcProduct,
         status:            isPro ? (profile?.subscription_status as SubStatus ?? 'active') : 'free',
         expiresAt:         profile?.subscription_expires_at ?? null,
         promoUntil:        promoActive ? promoUntil : null,
@@ -173,17 +239,30 @@ export const useSubscriptionStore = create<SubscriptionState>()((set, get) => ({
 
       // 5. Register a real-time listener so purchases / renewals / expirations
       //    update the store immediately without needing an app restart.
+      //    IMPORTANT: The listener must not downgrade isPro when an active
+      //    promo is in effect — RC doesn't know about promo access.
       const prev = get()._unsubListener;
       if (prev) prev();  // clean up any previous listener
       const unsub = addCustomerInfoListener((info) => {
-        const nowPro = isProFromInfo(info);
-        const ent    = info.entitlements.active[ENTITLEMENT_ID];
+        const rcPro = isProFromInfo(info);
+        const ent   = info.entitlements.active[ENTITLEMENT_ID];
+
+        // Preserve promo-granted access: if RC says free but promo is active,
+        // keep isPro = true and don't overwrite promoUntil.
+        const currentPromo = get().promoUntil;
+        const promoStillActive = currentPromo && new Date(currentPromo) > new Date();
+
+        const effectiveIsPro = rcPro || !!promoStillActive;
+        const rcProductId    = ent?.productIdentifier ?? null;
+
         set({
-          isPro:     nowPro,
-          status:    nowPro ? 'active' : 'free',
-          expiresAt: ent?.expirationDate ?? null,
+          isPro:       effectiveIsPro,
+          status:      effectiveIsPro ? (rcPro ? 'active' : get().status) : 'free',
+          expiresAt:   ent?.expirationDate ?? get().expiresAt,
+          rcProductId: rcProductId,
+          // promoUntil is NOT cleared here — only cleared by RC webhook on paid upgrade
         });
-        console.log('[Subscription] Listener update — isPro:', nowPro);
+        console.log(`[Subscription] Listener update — rcPro=${rcPro} promoActive=${!!promoStillActive} effectiveIsPro=${effectiveIsPro} product=${rcProductId}`);
       });
       set({ _unsubListener: unsub });
     } catch (err) {
@@ -195,16 +274,27 @@ export const useSubscriptionStore = create<SubscriptionState>()((set, get) => ({
 
   /**
    * Update store from a fresh CustomerInfo (after purchase / restore).
+   * Preserves promo-granted access if RC has no active entitlement.
    */
   setProFromInfo(info: CustomerInfo) {
-    const isPro = isProFromInfo(info);
+    const rcPro = isProFromInfo(info);
     const entitlement = info.entitlements.active[ENTITLEMENT_ID];
 
+    // If RC says pro, this is a paid subscription — it takes priority.
+    // If RC says free, check if promo is still active before downgrading.
+    const currentPromo = get().promoUntil;
+    const promoStillActive = currentPromo && new Date(currentPromo) > new Date();
+    const effectiveIsPro = rcPro || !!promoStillActive;
+
     set({
-      isPro,
-      status:    isPro ? 'active' : 'free',
-      expiresAt: entitlement?.expirationDate ?? null,
+      isPro:       effectiveIsPro,
+      status:      effectiveIsPro ? 'active' : 'free',
+      expiresAt:   entitlement?.expirationDate ?? (promoStillActive ? currentPromo : null),
+      rcProductId: entitlement?.productIdentifier ?? null,
+      // If user bought a paid plan, clear promo (clean transition)
+      promoUntil:  rcPro ? null : get().promoUntil,
     });
+    console.log(`[Subscription] setProFromInfo — rcPro=${rcPro} promoActive=${!!promoStillActive} effectiveIsPro=${effectiveIsPro}`);
   },
 
   /**
@@ -250,7 +340,15 @@ export const useSubscriptionStore = create<SubscriptionState>()((set, get) => ({
    */
   async redeemPromo(code: string) {
     try {
-      const { data: { session } } = await supabase.auth.getSession();
+      // Read cached session first, then proactively refresh if the
+      // token is expired or within 60 s of expiry — identical to the
+      // pattern in useDashboard / useSnapshotCapture.
+      let { data: { session } } = await supabase.auth.getSession();
+      const expiresAt = session?.expires_at ?? 0; // unix seconds
+      if (!session?.access_token || (expiresAt * 1_000 - Date.now()) < 60_000) {
+        const { data } = await supabase.auth.refreshSession();
+        session = data.session;
+      }
       if (!session) return { ok: false, message: 'Please sign in and try again.' };
 
       // Use raw fetch instead of supabase.functions.invoke so we always
@@ -298,6 +396,7 @@ export const useSubscriptionStore = create<SubscriptionState>()((set, get) => ({
       // Success — update store immediately
       set({
         isPro: true,
+        rcProductId: get().rcProductId,  // preserve any existing RC product
         status: 'active',
         expiresAt: body.grants_until ?? null,
         promoUntil: body.grants_until ?? null,
@@ -319,6 +418,7 @@ export const useSubscriptionStore = create<SubscriptionState>()((set, get) => ({
     if (unsub) unsub();
     set({
       isPro: false,
+      rcProductId: null,
       status: 'free',
       expiresAt: null,
       promoUntil: null,

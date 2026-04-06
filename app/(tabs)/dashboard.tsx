@@ -11,6 +11,7 @@ import {
   RefreshControl,
   ActivityIndicator,
   Alert,
+  AppState,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect, useRouter } from 'expo-router';
@@ -20,7 +21,6 @@ import { useDashboard }                                          from '@/hooks/u
 import { useSnapshotCapture, SnapshotLimitError, SnapshotError } from '@/hooks/useSnapshotCapture';
 import { useNetwork }                            from '@/hooks/useNetwork';
 import { DashboardCard }                       from '@/components/DashboardCard';
-import { BannerAdView }                        from '@/components/BannerAdView';
 import { StatsRow }                            from '@/components/StatsRow';
 import { WeeklySummaryCard }                   from '@/components/WeeklySummaryCard';
 import { StreakBadge }                         from '@/components/StreakBadge';
@@ -36,6 +36,7 @@ import type { ListType }                       from '@/hooks/useListData';
 import { TapTheDotGameModal }                  from '@/components/TapTheDotGameModal';
 import { recordSuccessfulSnapshot }            from '@/hooks/useReviewPrompt';
 import { trackEvent }                          from '@/lib/analytics';
+import { reconcile }                           from '@/hooks/useSnapshotReconciliation';
 
 // â”€â”€ Countdown hook â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 function useCountdown(targetIso: string | null): string | null {
@@ -97,6 +98,9 @@ export default function DashboardScreen() {
   const [manualRefreshing, setManualRefreshing] = useState(false);
   const setPendingListType                     = useAuthStore((s) => s.setPendingListType);
   const user                                   = useAuthStore((s) => s.user);
+  const igAccountId                            = useAuthStore((s) => s.igAccountId);
+  const pendingNotificationJobId               = useAuthStore((s) => s.pendingNotificationJobId);
+  const setPendingNotificationJobId            = useAuthStore((s) => s.setPendingNotificationJobId);
 
   // Subscription (freemium: snapshots always allowed, lists gated)
   const isPro               = useSubscriptionStore((s) => s.isPro);
@@ -113,6 +117,18 @@ export default function DashboardScreen() {
   const [snapshotErr,    setSnapshotErr]    = useState<string | null>(null);
   // track previous capturing so we detect the transition
   const wasCapturingRef = useRef(false);
+
+  // ── Reconciliation state ──────────────────────────────────────
+  // "Completed while away" banner (auto-dismisses after 5 s)
+  const [completedWhileAway, setCompletedWhileAway] = useState(false);
+  // Guard against duplicate reconciliation runs
+  const isReconciling = useRef(false);
+  // Track AppState for foreground transitions
+  const appStateRef = useRef(AppState.currentState);
+  // Gate: don't show stale error UI until initial reconciliation has run.
+  // This prevents a flash of a poll-failure error card before reconciliation
+  // has a chance to clear/replace it with the real server state.
+  const [reconciliationDone, setReconciliationDone] = useState(false);
 
   // next_allowed_at: prefer live API value, updated on rate-limit error
   const [overrideNextAt, setOverrideNextAt]    = useState<string | null>(null);
@@ -186,6 +202,92 @@ export default function DashboardScreen() {
       capture.clearError();
     }, []),
   );
+
+  // ── Reconciliation: backend is source of truth ──────────────────
+  // On mount, foreground resume, or notification tap, check the server
+  // for the real job state and act accordingly.
+  const runReconciliation = useCallback(async (targetJobId?: string) => {
+    if (!igAccountId || isReconciling.current) return;
+    isReconciling.current = true;
+    try {
+      console.log('[dashboard] Running reconciliation…');
+      const action = await reconcile(igAccountId, capture.isPending, targetJobId);
+
+      switch (action.type) {
+        case 'completed_while_away':
+          console.log('[dashboard] Reconciliation: snapshot completed while away');
+          capture.clearError();
+          setCompletedWhileAway(true);
+          setTimeout(() => setCompletedWhileAway(false), 6_000);
+          break;
+
+        case 'still_running':
+        case 'still_queued':
+          // Server says the job is still active. Auto-resume the
+          // polling loop by calling mutateAsync, which will detect the
+          // existing running job via snapshot-start.
+          console.log('[dashboard] Reconciliation: auto-resuming job', action.jobId);
+          capture.clearError();
+          capture.mutateAsync().catch(() => {});
+          break;
+
+        case 'failed':
+          // Show the server's typed failure, not a stale client error.
+          console.log('[dashboard] Reconciliation: job failed —', action.failureCode);
+          capture.setExternalError(
+            new SnapshotError(action.failureCode, action.error),
+          );
+          break;
+
+        case 'stale_cleared':
+          console.log('[dashboard] Reconciliation: stale local state cleared');
+          capture.clearError();
+          refetch();
+          break;
+
+        case 'none':
+        default:
+          break;
+      }
+    } catch (err) {
+      console.warn('[dashboard] Reconciliation error:', (err as Error).message);
+    } finally {
+      isReconciling.current = false;
+      // Mark the initial gate as open so error UI can render.
+      if (!reconciliationDone) setReconciliationDone(true);
+    }
+  }, [igAccountId, capture.isPending, capture, refetch, reconciliationDone]);
+
+  // Run reconciliation on initial mount (cold launch)
+  useEffect(() => {
+    runReconciliation();
+  }, [igAccountId]);
+
+  // Run reconciliation when app foregrounds (active → background → active)
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (nextState) => {
+      const prevState = appStateRef.current;
+      appStateRef.current = nextState;
+
+      if (nextState === 'active' && prevState !== 'active') {
+        console.log(`[dashboard] App foregrounded (${prevState} → ${nextState})`);
+        runReconciliation();
+      } else if (nextState !== 'active' && prevState === 'active') {
+        console.log(`[dashboard] App backgrounded (${prevState} → ${nextState})`);
+      }
+    });
+    return () => sub.remove();
+  }, [runReconciliation]);
+
+  // React to notification-tap jobId (set by useNotifications)
+  useEffect(() => {
+    if (pendingNotificationJobId) {
+      console.log('[dashboard] Consuming pending notification jobId:', pendingNotificationJobId);
+      const jobId = pendingNotificationJobId;
+      setPendingNotificationJobId(null);
+      runReconciliation(jobId);
+    }
+  }, [pendingNotificationJobId, runReconciliation, setPendingNotificationJobId]);
 
   // Detect snapshot finish → update modal feedback flags
   useEffect(() => {
@@ -273,7 +375,6 @@ export default function DashboardScreen() {
 
   return (
     <SafeAreaView style={styles.safe}>
-      <BannerAdView />
 
       <ScrollView
         contentContainerStyle={styles.scroll}
@@ -293,6 +394,16 @@ export default function DashboardScreen() {
             <Ionicons name="cloud-offline-outline" size={16} color={C.amber} />
             <Text style={styles.offlineBannerText}>
               You're offline. Showing your last snapshot.
+            </Text>
+          </View>
+        )}
+
+        {/* "Completed while away" success banner */}
+        {completedWhileAway && (
+          <View style={styles.completedAwayBanner}>
+            <Ionicons name="checkmark-circle" size={16} color={C.green} />
+            <Text style={styles.completedAwayText}>
+              Snapshot finished while you were away — results updated!
             </Text>
           </View>
         )}
@@ -477,8 +588,10 @@ export default function DashboardScreen() {
           snapshotError={snapshotErr}
         />
 
-        {/* Snapshot capture error */}
-        {capture.error && (
+        {/* Snapshot capture error — gated behind initial reconciliation
+             so we never flash a stale poll error before the server state
+             has been checked and applied. */}
+        {reconciliationDone && capture.error && (
           <SnapshotErrorCard
             error={capture.error}
             onDismiss={capture.clearError}
@@ -891,6 +1004,21 @@ const styles = StyleSheet.create({
   },
   offlineBannerText: {
     color:    C.amber,
+    fontSize: 13,
+    flex:     1,
+  },
+
+  completedAwayBanner: {
+    flexDirection:   'row',
+    alignItems:      'center',
+    gap:             8,
+    backgroundColor: C.greenDim,
+    borderRadius:    10,
+    padding:         10,
+    marginBottom:    12,
+  },
+  completedAwayText: {
+    color:    C.green,
     fontSize: 13,
     flex:     1,
   },

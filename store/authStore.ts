@@ -15,6 +15,9 @@ interface AuthState {
   /** Route queued by a notification tap that arrived before auth was ready. */
   pendingNotificationRoute: string | null;
 
+  /** Job ID from a snapshot-complete notification tap, consumed by dashboard reconciliation. */
+  pendingNotificationJobId: string | null;
+
   /** Whether the user has accepted the current Terms of Service version. */
   termsAccepted:  boolean;
 
@@ -23,6 +26,7 @@ interface AuthState {
   setIgAccountId:  (id: string | null) => void;
   setPendingListType: (type: string | null) => void;
   setPendingNotificationRoute: (route: string | null) => void;
+  setPendingNotificationJobId: (id: string | null) => void;
   setTermsAccepted: (accepted: boolean) => void;
 }
 
@@ -33,6 +37,7 @@ export const useAuthStore = create<AuthState>()((set) => ({
   igAccountId:     null,
   pendingListType: null,
   pendingNotificationRoute: null,
+  pendingNotificationJobId: null,
   termsAccepted:   false,
 
   setSession: (session) =>
@@ -49,6 +54,9 @@ export const useAuthStore = create<AuthState>()((set) => ({
 
   setPendingNotificationRoute: (route) =>
     set({ pendingNotificationRoute: route }),
+
+  setPendingNotificationJobId: (id) =>
+    set({ pendingNotificationJobId: id }),
 
   setTermsAccepted: (accepted) =>
     set({ termsAccepted: accepted }),

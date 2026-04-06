@@ -29,7 +29,7 @@ function resolveRoute(screen: string | undefined): string {
 export function useNotifications(): void {
   const router = useRouter();
   const qc     = queryClient;
-  const { session, igAccountId, initialised, setPendingNotificationRoute } = useAuthStore();
+  const { session, igAccountId, initialised, setPendingNotificationRoute, setPendingNotificationJobId } = useAuthStore();
   const didRegister = useRef(false);
 
   // ── Silently re-register token on boot (returning users only) ──
@@ -54,9 +54,16 @@ export function useNotifications(): void {
       const data = response.notification.request.content.data as
         Record<string, unknown> | undefined;
 
-      console.log('[useNotifications] Notification tapped:', data);
+      const jobId = data?.jobId as string | undefined;
+      console.log('[useNotifications] Notification tapped:', data, '| jobId:', jobId ?? 'none');
 
       const route = resolveRoute(data?.screen as string | undefined);
+
+      // Store the jobId so dashboard reconciliation can verify the exact
+      // job rather than guessing from the most-recent query.
+      if (jobId) {
+        setPendingNotificationJobId(jobId);
+      }
 
       // If the app is still bootstrapping (cold start), defer navigation
       // until AuthGuard is ready — otherwise router.push can silently fail
@@ -88,7 +95,12 @@ export function useNotifications(): void {
       const data = response.notification.request.content.data as
         Record<string, unknown> | undefined;
       const route = resolveRoute(data?.screen as string | undefined);
-      console.log('[useNotifications] Cold-start notification detected, queuing route:', route);
+      const jobId = data?.jobId as string | undefined;
+      console.log('[useNotifications] Cold-start notification detected, queuing route:', route, '| jobId:', jobId ?? 'none');
+
+      if (jobId) {
+        setPendingNotificationJobId(jobId);
+      }
 
       const state = useAuthStore.getState();
       if (!state.initialised || !state.session || !state.igAccountId) {
