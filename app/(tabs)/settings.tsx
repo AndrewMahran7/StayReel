@@ -18,6 +18,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 
+import { useShallow } from 'zustand/shallow';
 import { useRouter } from 'expo-router';
 import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/store/authStore';
@@ -30,6 +31,9 @@ import { SchoolPickerModal } from '@/components/SchoolPickerModal';
 import { ReferralCodeModal } from '@/components/ReferralCodeModal';
 import { PromoCodeModal } from '@/components/PromoCodeModal';
 import { schoolLabel } from '@/lib/schools';
+import { isBetaActive } from '@/lib/betaAccess';
+import { useAutoSnapshotSetting } from '@/hooks/useAutoSnapshotSetting';
+import { HowItWorksModal } from '@/components/HowItWorksModal';
 import C from '@/lib/colors';
 
 export default function SettingsScreen() {
@@ -44,17 +48,25 @@ export default function SettingsScreen() {
   const [showSchoolPicker, setShowSchoolPicker] = useState(false);
   const [showReferralModal, setShowReferralModal] = useState(false);
   const [showPromoModal, setShowPromoModal] = useState(false);
+  const [showHowItWorks, setShowHowItWorks] = useState(false);
   const { settings: notifPrefs, update: updateNotifPref } = useNotificationSettings();
+  const autoSnapshot = useAutoSnapshotSetting();
 
   // Subscription
+  // useShallow is required here because effectivePlan() returns a new object
+  // literal on every call. Without it, Zustand's useSyncExternalStore selector
+  // always sees a changed reference, violating React 18's getSnapshot contract
+  // and causing an immediate crash ("getSnapshot should be cached").
   const isPro  = useSubscriptionStore((s) => s.isPro);
-  const plan   = useSubscriptionStore((s) => s.effectivePlan());
+  const plan   = useSubscriptionStore(useShallow((s) => s.effectivePlan()));
 
-  const planLabel  = plan.planLabel;
+  const planLabel  = plan?.planLabel ?? 'Free';
   const expiryLabel = (() => {
-    const dateStr = plan.expiresAt;
+    const dateStr = plan?.expiresAt;
     if (!dateStr) return null;
-    return new Date(dateStr).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+    const d = new Date(dateStr);
+    if (isNaN(d.getTime())) return null;   // guard against invalid date strings
+    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
   })();
 
   // School attribution — shared query key so picker invalidation refreshes here
@@ -268,16 +280,33 @@ export default function SettingsScreen() {
           value={planLabel}
         />
 
-        {isPro && expiryLabel && (
+        {isBetaActive() && (
+          <View style={styles.betaInfoRow}>
+            <View style={[sStyles.iconWrap, { backgroundColor: C.accentDim }]}>
+              <Ionicons name="star" size={18} color={C.accent} />
+            </View>
+            <View style={sStyles.rowBody}>
+              <Text style={sStyles.rowTitle}>Pro is free during beta</Text>
+              <Text style={sStyles.rowSub}>All features are unlocked while we grow together</Text>
+            </View>
+          </View>
+        )}
+
+        {isPro && expiryLabel && !isBetaActive() && (
           <SettingRow
             icon="calendar-outline"
             iconColor={C.textSecondary}
-            title={plan.source === 'promo' ? 'Promo expires' : plan.source === 'trial' ? 'Trial ends' : 'Renews'}
+            title={
+              plan?.source === 'promo'  ? 'Promo expires' :
+              plan?.source === 'trial'  ? 'Trial ends'    :
+              plan?.source === 'annual' ? 'Renews'        :
+              'Renews'
+            }
             value={expiryLabel}
           />
         )}
 
-        {!isPro && (
+        {!isPro && !isBetaActive() && (
           <ActionRow
             icon="pricetag-outline"
             iconColor={C.green}
@@ -287,7 +316,7 @@ export default function SettingsScreen() {
           />
         )}
 
-        {!isPro && (
+        {!isPro && !isBetaActive() && (
           <ActionRow
             icon="rocket-outline"
             iconColor={C.accent}
@@ -297,7 +326,7 @@ export default function SettingsScreen() {
           />
         )}
 
-        {!isPro && (
+        {!isPro && !isBetaActive() && (
           <ActionRow
             icon="refresh-outline"
             iconColor={C.textSecondary}
@@ -324,7 +353,7 @@ export default function SettingsScreen() {
           />
         )}
 
-        {isPro && (
+        {isPro && !isBetaActive() && (
           <ActionRow
             icon="settings-outline"
             iconColor={C.textSecondary}
@@ -334,7 +363,7 @@ export default function SettingsScreen() {
           />
         )}
 
-        {isPro && (
+        {isPro && !isBetaActive() && (
           <ActionRow
             icon="close-circle-outline"
             iconColor={C.red}
@@ -354,12 +383,34 @@ export default function SettingsScreen() {
         <SectionHeader title="Notifications" />
 
         <ToggleRow
+          icon="refresh-circle-outline"
+          iconColor={C.teal}
+          title="Automatic daily snapshots"
+          subtitle="One snapshot per day around midday (counts toward daily limit)"
+          value={autoSnapshot.enabled}
+          onToggle={() => {
+            autoSnapshot.toggle().catch(() =>
+              Alert.alert('Error', 'Could not save auto-snapshot preference.'),
+            );
+          }}
+        />
+
+        <ToggleRow
           icon="checkmark-done-outline"
           iconColor={C.green}
           title="Snapshot ready"
           subtitle="When your follower refresh finishes"
           value={notifPrefs.notify_refresh_complete}
           onToggle={() => toggleNotif('notify_refresh_complete')}
+        />
+
+        <ToggleRow
+          icon="trending-up-outline"
+          iconColor={C.accent}
+          title="Meaningful changes"
+          subtitle="Only when 3+ followers change or after you post"
+          value={notifPrefs.notify_on_meaningful_change ?? true}
+          onToggle={() => toggleNotif('notify_on_meaningful_change')}
         />
 
         <ToggleRow
@@ -430,6 +481,13 @@ export default function SettingsScreen() {
         {/* Our Promise */}
         <SectionHeader title="About" />
         <ActionRow
+          icon="bulb-outline"
+          iconColor={C.amber}
+          title="How StayReel Works"
+          subtitle="Snapshots, comparisons, and automatic updates explained."
+          onPress={() => setShowHowItWorks(true)}
+        />
+        <ActionRow
           icon="heart-circle-outline"
           iconColor={C.teal}
           title="Our Promise"
@@ -465,6 +523,7 @@ export default function SettingsScreen() {
         visible={showPromoModal}
         onClose={() => setShowPromoModal(false)}
       />
+      <HowItWorksModal visible={showHowItWorks} onClose={() => setShowHowItWorks(false)} />
     </SafeAreaView>
   );
 }
@@ -565,6 +624,17 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     letterSpacing: -0.5,
     marginBottom: 16,
+  },
+  betaInfoRow: {
+    flexDirection:   'row',
+    alignItems:      'center',
+    backgroundColor: C.surface,
+    borderRadius:    14,
+    borderWidth:     1,
+    borderColor:     C.accentDim,
+    padding:         14,
+    gap:             12,
+    marginBottom:    8,
   },
   row: {
     flexDirection:   'row',

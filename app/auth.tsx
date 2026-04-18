@@ -1,13 +1,16 @@
 // app/auth.tsx
-// Catches the deep-link route `stayreel://auth?code=...` that Supabase
-// sends as the magic-link callback (PKCE flow).
+// Catches the deep-link route `stayreel://auth?token_hash=...&type=magiclink`
+// that Supabase sends as the magic-link callback (implicit flow).
 //
 // Primary exchange is handled by the root layout (Linking.getInitialURL
 // on cold start, addEventListener on warm start). This screen acts as a
 // **fallback**: if the root layout handler misses the URL or loses a race,
-// auth.tsx reads the `code` from expo-router search params and retries the
+// auth.tsx reads the params from expo-router search params and retries the
 // exchange itself. It also surfaces errors and provides retry / back-to-
 // sign-in options so the user is never stranded on a blank spinner.
+//
+// Legacy: also handles `?code=...` for PKCE emails still in user inboxes
+// from before the implicit flow migration.
 
 import React, { useEffect, useRef, useState } from 'react';
 import {
@@ -53,9 +56,11 @@ export default function AuthCallback() {
     }
   }, [params.error, params.error_description]);
 
-  // ── 2. Fallback code exchange ──────────────────────────────────────
+  // ── 2. Fallback token verification ──────────────────────────────────
   //    Waits FALLBACK_DELAY_MS so the root layout handler can try first,
   //    then attempts the exchange itself if no session appeared.
+  //    Primary path: token_hash + type (implicit flow).
+  //    Legacy path:  code (PKCE, for emails sent before the flow change).
   useEffect(() => {
     if (session || attemptedRef.current || error) return;
     if (!params.code && !params.token_hash) return;
@@ -68,15 +73,8 @@ export default function AuthCallback() {
       setExchanging(true);
 
       try {
-        if (params.code) {
-          console.log('[Auth] auth.tsx fallback — exchanging code');
-          const result = await exchangeAuthCode(params.code);
-          if (!result.success && result.error !== 'Code already processed') {
-            setError(result.error ?? 'Code exchange failed.');
-          }
-        } else if (params.token_hash && params.type) {
-          // token_hash fallback — shouldn't normally reach here, but
-          // covers edge cases where the redirect contains a hash-verify.
+        if (params.token_hash && params.type) {
+          // Implicit flow — primary path for mobile magic links.
           console.log('[Auth] auth.tsx fallback — verifyOtp via token_hash');
           const url = Linking.createURL('auth', {
             queryParams: {
@@ -86,6 +84,13 @@ export default function AuthCallback() {
           });
           const ok = await handleAuthDeepLink(url);
           if (!ok) setError('Verification failed. Please request a new link.');
+        } else if (params.code) {
+          // Legacy PKCE path — only for emails already in user inboxes.
+          console.log('[Auth] auth.tsx fallback — exchanging PKCE code (legacy)');
+          const result = await exchangeAuthCode(params.code);
+          if (!result.success && result.error !== 'Code already processed') {
+            setError(result.error ?? 'Code exchange failed.');
+          }
         }
       } catch (e: any) {
         console.warn('[Auth] auth.tsx fallback error:', e?.message);

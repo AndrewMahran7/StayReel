@@ -47,7 +47,7 @@ Deno.serve(async (req: Request) => {
     // â”€â”€ Fetch ig_accounts row for streak + last_snapshot_at â”€â”€
     const { data: acct } = await adminClient()
       .from("ig_accounts")
-      .select("last_snapshot_at, current_streak_days, longest_streak_days")
+      .select("last_snapshot_at, current_streak_days, longest_streak_days, auto_snapshot_enabled, last_auto_snapshot_at, reconnect_required, last_auth_error_code")
       .eq("id", igAccountId)
       .maybeSingle();
 
@@ -200,6 +200,19 @@ Deno.serve(async (req: Request) => {
       // Flags
       is_complete:                snap.is_list_complete ?? false,
       has_diff:                   diffUsable,
+
+      // Auto snapshot status
+      auto_snapshot_enabled:      acct?.auto_snapshot_enabled ?? true,
+      last_auto_snapshot_at:      acct?.last_auto_snapshot_at ?? null,
+
+      // Reconnect state
+      reconnect_required:         acct?.reconnect_required ?? false,
+      last_auth_error_code:       acct?.last_auth_error_code ?? null,
+
+      // Product-facing tracking state
+      tracking_state:             (acct?.reconnect_required)
+                                    ? 'tracking_paused_reconnect_required'
+                                    : 'tracking_active',
     });
   } catch (err) {
     return errorResponse(err);

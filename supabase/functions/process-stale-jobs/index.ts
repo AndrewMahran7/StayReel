@@ -96,12 +96,12 @@ Deno.serve(async (req: Request) => {
         // ── Load IG account + cookie ─────────────────────────────────
         const { data: igAccount } = await db
           .from("ig_accounts")
-          .select("ig_user_id, vault_secret_id, status")
+          .select("ig_user_id, vault_secret_id, status, reconnect_required")
           .eq("id", job.ig_account_id)
           .is("deleted_at", null)
           .single();
 
-        if (!igAccount || igAccount.status === "suspended" || !igAccount.vault_secret_id) {
+        if (!igAccount || igAccount.status === "suspended" || !igAccount.vault_secret_id || igAccount.reconnect_required) {
           // Account disconnected or suspended while job was in progress
           const failedAt = new Date().toISOString();
           const totalDurationMs = job.started_at

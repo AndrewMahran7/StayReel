@@ -28,7 +28,7 @@ file_size_limit = "50MiB"
 [auth]
 enabled = true
 site_url = "http://localhost:3000"
-additional_redirect_urls = ["stayreel://auth/callback"]
+additional_redirect_urls = ["stayreel://auth", "stayreel://auth/callback"]
 jwt_expiry = 3600
 enable_refresh_token_rotation = true
 refresh_token_reuse_interval = 10
@@ -81,5 +81,29 @@ verify_jwt = false
 verify_jwt = false
 
 [functions.unfollow-user]
+verify_jwt = false
+
+[functions.auto-snapshot-scheduler]
+verify_jwt = false
+
+[functions.process-stale-jobs]
+verify_jwt = false
+
+[functions.rc-webhook]
+verify_jwt = false
+
+[functions.redeem-promo]
+verify_jwt = false
+
+[functions.send-notification]
+verify_jwt = false
+
+[functions.set-referral]
+verify_jwt = false
+
+[functions.smart-notify]
+verify_jwt = false
+
+[functions.weekly-summary-notify]
 verify_jwt = false
 

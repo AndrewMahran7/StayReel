@@ -53,16 +53,6 @@ export interface JobProgress {
   partialResultsReady: boolean;
 }
 
-export class SnapshotLimitError extends Error {
-  constructor(
-    public readonly nextAllowedAt: string,
-    message: string,
-  ) {
-    super(message);
-    this.name = 'SnapshotLimitError';
-  }
-}
-
 /** Thrown when the server returns a typed error code during a snapshot job. */
 export class SnapshotError extends Error {
   constructor(
@@ -71,6 +61,16 @@ export class SnapshotError extends Error {
   ) {
     super(message);
     this.name = 'SnapshotError';
+  }
+}
+
+export class SnapshotLimitError extends SnapshotError {
+  constructor(
+    public readonly nextAllowedAt: string,
+    message: string,
+  ) {
+    super('SNAPSHOT_LIMIT', message);
+    this.name = 'SnapshotLimitError';
   }
 }
 
@@ -173,6 +173,15 @@ async function startJob(igAccountId: string, isRetry = false): Promise<ChunkResp
     body:    JSON.stringify({ ig_account_id: igAccountId, source: 'manual' }),
   });
   const body = await res.json().catch(() => ({}));
+
+  // Structured reconnect-required response (HTTP 200, not an error).
+  // snapshot-start returns this as a product state, not a thrown error.
+  if (body?.reconnect_required === true) {
+    return { jobId: '', status: 'failed', phase: 'followers' as const, pagesDone: 0,
+      followersSeen: 0, followingSeen: 0, done: true,
+      reconnect_required: true } as ChunkResponse;
+  }
+
   if (!res.ok) {
     if (body?.error === 'SNAPSHOT_LIMIT' && body?.detail?.next_allowed_at) {
       throw new SnapshotLimitError(body.detail.next_allowed_at, body.message ?? 'You can take one snapshot per hour.');
@@ -182,6 +191,13 @@ async function startJob(igAccountId: string, isRetry = false): Promise<ChunkResp
     // failure. Only retry as UNAUTHORIZED when the body has *no* specific code.
     const serverCode: string | undefined = body?.error;
     if (serverCode && serverCode !== 'UNAUTHORIZED') {
+      // Reconnect failure codes (legacy compatibility fallback) — suppress
+      // as errors and return a done/reconnect response instead.
+      if (RECONNECT_FAILURE_CODES.has(serverCode)) {
+        return { jobId: '', status: 'failed', phase: 'followers' as const, pagesDone: 0,
+          followersSeen: 0, followingSeen: 0, done: true,
+          reconnect_required: true } as ChunkResponse;
+      }
       throw new SnapshotError(serverCode, body?.message ?? `HTTP ${res.status}`);
     }
     // Gateway-level 401 ({"code":401,"message":"Invalid JWT"}) or explicit
@@ -211,6 +227,12 @@ async function continueJob(jobId: string, isRetry = false): Promise<ChunkRespons
     body:    JSON.stringify({ job_id: jobId }),
   });
   const body = await res.json().catch(() => ({}));
+
+  // Structured reconnect-required response from snapshot-continue.
+  if (body?.reconnect_required === true) {
+    return body as ChunkResponse;
+  }
+
   if (!res.ok) {
     const serverCode: string | undefined = body?.error;
     if (serverCode && serverCode !== 'UNAUTHORIZED') {
@@ -230,6 +252,13 @@ async function continueJob(jobId: string, isRetry = false): Promise<ChunkRespons
   }
   return body as ChunkResponse;
 }
+
+/** Failure codes indicating the user must reconnect Instagram. */
+const RECONNECT_FAILURE_CODES = new Set([
+  'SESSION_EXPIRED', 'IG_SESSION_INVALID',
+  'CHALLENGE_REQUIRED', 'CHECKPOINT_REQUIRED', 'IG_CHALLENGE_REQUIRED',
+  'RECONNECT_REQUIRED',
+]);
 
 // ── Hook ──────────────────────────────────────────────────────────────────────
 
@@ -281,6 +310,18 @@ export function useSnapshotCapture() {
       let wasResumed         = false;   // latched true when server returns an existing running job
 
       const first = await startJob(igAccountId);
+
+      // If the start response indicates reconnect-required, end silently.
+      // The dashboard will pick up reconnect_required from diffs-latest.
+      if (first.done && ((first as any).reconnect_required || first.status === 'failed')) {
+        const raw = (first as any).error ?? (first as any).message ?? '';
+        const code = raw ? inferCodeFromMessage(raw) : '';
+        if ((first as any).reconnect_required || RECONNECT_FAILURE_CODES.has(code)) {
+          console.log('[snapshot] Start blocked by reconnect-required state — suppressing error UI');
+          return finalise(first);
+        }
+      }
+
       if (first.followingCached) runFollowingCached = true;
       if (first.resumed) wasResumed = true;
 
@@ -367,6 +408,16 @@ export function useSnapshotCapture() {
         // UI can show appropriate guidance. The message often contains the code.
         const raw = current.error ?? current.message ?? 'Snapshot job failed.';
         const code = inferCodeFromMessage(raw);
+
+        // Reconnect-required failures are not surfaced as errors — the
+        // dashboard picks up reconnect_required from diffs-latest and
+        // shows a calm "tracking paused" state.  We simply end the capture
+        // loop silently and let the data refetch handle UX.
+        if (RECONNECT_FAILURE_CODES.has(code) || (current as any).reconnect_required) {
+          console.log('[snapshot] Job ended due to reconnect-required state — suppressing error UI');
+          return finalise(current);
+        }
+
         throw new SnapshotError(code, raw);
       }
 

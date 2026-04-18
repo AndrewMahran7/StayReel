@@ -9,6 +9,13 @@ import { useAuthStore } from '@/store/authStore';
 import { saveSnapshot, loadSnapshot } from '@/lib/offlineStorage';
 import { fetchWithTimeout } from '@/lib/fetchWithTimeout';
 
+/** Product-facing tracking state — drives UI instead of raw error conditions. */
+export type TrackingState =
+  | 'tracking_active'
+  | 'tracking_updating'
+  | 'tracking_paused_reconnect_required'
+  | 'tracking_paused_temporary_issue';
+
 export interface DiffSummary {
   // Diff identification
   diff_id:                    string | null;
@@ -48,6 +55,17 @@ export interface DiffSummary {
   // Flags
   is_complete:                boolean;
   has_diff:                   boolean;
+
+  // Reconnect state (server-driven)
+  reconnect_required:         boolean;
+  last_auth_error_code:       string | null;
+
+  // Product-facing tracking state
+  tracking_state:             TrackingState;
+
+  // Auto-snapshot state
+  auto_snapshot_enabled:      boolean;
+  last_auto_snapshot_at:      string | null;
 }
 
 async function fetchDashboard(igAccountId: string): Promise<DiffSummary | null> {

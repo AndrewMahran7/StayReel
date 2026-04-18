@@ -23,6 +23,7 @@ import RevenueCatUI from 'react-native-purchases-ui';
 import { isRevenueCatConfigured, getRevenueCatConfigError, isProFromInfo } from '@/lib/revenueCat';
 import { useSubscriptionStore } from '@/store/subscriptionStore';
 import { trackEvent }           from '@/lib/analytics';
+import { isBetaActive }         from '@/lib/betaAccess';
 import C from '@/lib/colors';
 
 interface Props {
@@ -44,6 +45,40 @@ export function PaywallModal({ visible, onClose }: Props) {
   }, [visible]);
 
   if (!visible) return null;
+
+  // ── Beta access: suppress paywall, show lightweight message ──
+  if (isBetaActive()) {
+    trackEvent('paywall_suppressed', { reason: 'beta_active' });
+    return (
+      <Modal
+        visible
+        animationType="slide"
+        presentationStyle="fullScreen"
+        onRequestClose={onClose}
+      >
+        <SafeAreaView style={styles.fallback}>
+          <TouchableOpacity style={styles.closeBtn} onPress={onClose} hitSlop={16}>
+            <Ionicons name="close" size={24} color={C.textMuted} />
+          </TouchableOpacity>
+
+          <View style={styles.betaBadgeCircle}>
+            <Ionicons name="star" size={28} color={C.accent} />
+          </View>
+          <Text style={styles.fallbackTitle}>You have Pro access</Text>
+          <Text style={styles.fallbackText}>
+            All Pro features are free during the beta period.{'\n'}
+            Enjoy full access to every list and feature!
+          </Text>
+          <View style={styles.betaChip}>
+            <Text style={styles.betaChipText}>BETA ACCESS</Text>
+          </View>
+          <TouchableOpacity style={styles.fallbackBtn} onPress={onClose}>
+            <Text style={styles.fallbackBtnText}>Got it</Text>
+          </TouchableOpacity>
+        </SafeAreaView>
+      </Modal>
+    );
+  }
 
   // ── Fallback when RevenueCat isn't configured ────────────────
   if (!isRevenueCatConfigured()) {
@@ -166,5 +201,27 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 16,
     fontWeight: '700',
+  },
+  betaBadgeCircle: {
+    width:           56,
+    height:          56,
+    borderRadius:    28,
+    backgroundColor: C.accentDim,
+    alignItems:      'center',
+    justifyContent:  'center',
+    marginBottom:    8,
+  },
+  betaChip: {
+    backgroundColor: C.accentDim,
+    borderRadius:    12,
+    paddingVertical:  4,
+    paddingHorizontal: 12,
+    marginBottom:    24,
+  },
+  betaChipText: {
+    color:        C.accent,
+    fontSize:     11,
+    fontWeight:   '700',
+    letterSpacing: 1,
   },
 });

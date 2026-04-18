@@ -19,6 +19,7 @@ import { useAuthStore } from '@/store/authStore';
 import { useSubscriptionStore } from '@/store/subscriptionStore';
 import { fetchWithTimeout } from '@/lib/fetchWithTimeout';
 import { TermsAcceptanceModal } from '@/components/TermsAcceptanceModal';
+import { trackEvent } from '@/lib/analytics';
 import C from '@/lib/colors';
 
 function isLoginPage(url: string) {
@@ -132,6 +133,8 @@ export default function ConnectInstagramScreen() {
       if (!res.ok) throw new Error(json?.message ?? `HTTP ${res.status}`);
 
       setIgAccountId(json.ig_account_id);
+      trackEvent('instagram_connected');
+      trackEvent('reconnect_completed');
 
       // Ensure subscription state is hydrated before navigating —
       // prevents a flash of "free" state on the dashboard.

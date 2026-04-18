@@ -27,7 +27,20 @@ export type FunnelEvent =
   | 'paywall_opened'
   | 'purchase_completed'
   | 'review_prompt_shown'
-  | 'referral_applied';
+  | 'referral_applied'
+  | 'beta_access_shown'
+  | 'instagram_connected'
+  | 'paywall_suppressed'
+  | 'invite_tapped'
+  | 'auto_snapshot_scheduled'
+  | 'auto_snapshot_started'
+  | 'auto_snapshot_completed'
+  | 'auto_snapshot_skipped'
+  | 'meaningful_change_detected'
+  | 'notification_sent'
+  | 'reconnect_required_entered'
+  | 'reconnect_notification_sent'
+  | 'reconnect_completed';
 
 /**
  * Fire-and-forget: logs a funnel event for the current authenticated user.

@@ -16,6 +16,7 @@ import {
   addCustomerInfoListener,
   syncReferralAttribute,
 } from '@/lib/revenueCat';
+import { isBetaActive } from '@/lib/betaAccess';
 import type { CustomerInfo } from 'react-native-purchases';
 
 // ── Constants ──────────────────────────────────────────────────
@@ -51,7 +52,7 @@ function promoErrorMessage(code: string): string {
 
 // ── Types ──────────────────────────────────────────────────────
 export type SubStatus = 'free' | 'trial' | 'active' | 'expired' | 'cancelled';
-export type PlanSource = 'monthly' | 'annual' | 'trial' | 'promo' | 'free';
+export type PlanSource = 'monthly' | 'annual' | 'trial' | 'promo' | 'beta' | 'free';
 
 export interface EffectivePlan {
   hasProAccess: boolean;
@@ -112,6 +113,11 @@ export const useSubscriptionStore = create<SubscriptionState>()((set, get) => ({
    */
   effectivePlan(): EffectivePlan {
     const { isPro, status, expiresAt, promoUntil, rcProductId } = get();
+
+    // Beta access overrides everything — all users get Pro during beta
+    if (isBetaActive()) {
+      return { hasProAccess: true, source: 'beta', planLabel: 'Beta Access', expiresAt: null };
+    }
 
     if (!isPro) {
       return { hasProAccess: false, source: 'free', planLabel: 'Free', expiresAt: null };
@@ -212,7 +218,13 @@ export const useSubscriptionStore = create<SubscriptionState>()((set, get) => ({
           console.warn('[Subscription] DB says active/trial but subscription_expires_at is in the past — treating as free');
         }
       }
-      console.log(`[Subscription] proSource=${proSource} isPro=${isPro} rcReady=${rcReady} dbStatus=${profile?.subscription_status ?? 'null'} promoUntil=${promoUntil ?? 'none'}`);
+      // Beta access: grant Pro to all authenticated users regardless of RC/DB state
+      if (isBetaActive() && !isPro) {
+        isPro = true;
+        proSource = 'beta' as typeof proSource;
+      }
+
+      console.log(`[Subscription] proSource=${proSource} isPro=${isPro} rcReady=${rcReady} dbStatus=${profile?.subscription_status ?? 'null'} promoUntil=${promoUntil ?? 'none'} betaActive=${isBetaActive()}`);
 
       // 4. Also read local storage as a fallback for free usage count
       //    (in case the Supabase fetch had stale data on a slow network)

@@ -20,6 +20,7 @@ import { vaultRetrieve }                        from "../_shared/vault.ts";
 import { runSnapshotChunk, SnapshotJobRow, claimJobLock, releaseJobLock, updateHeartbeat } from "../_shared/snapshotJob.ts";
 import { notifyOwnerOfError }                  from "../_shared/notify.ts";
 import { countRunningJobs, MAX_CONCURRENT_JOBS, tryPromoteQueuedJob } from "../_shared/rate_limit.ts";
+import { classifyFetchFailure, requiresReconnect as isReconnectCategory } from "../_shared/instagram.ts";
 
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return corsPreflightResponse();
@@ -112,7 +113,7 @@ Deno.serve(async (req: Request) => {
     // ── 6. Load IG account + cookie ───────────────────────────────
     const { data: igAccount, error: acctErr } = await db
       .from("ig_accounts")
-      .select("id, ig_user_id, vault_secret_id, status")
+      .select("id, ig_user_id, vault_secret_id, status, reconnect_required")
       .eq("id", job.ig_account_id)
       .is("deleted_at", null)
       .single();
@@ -121,8 +122,33 @@ Deno.serve(async (req: Request) => {
     const acct = igAccount as unknown as {
       id: string; ig_user_id: string;
       vault_secret_id: string | null; status: string;
+      reconnect_required: boolean;
     };
     if (acct.status === "suspended") throw Errors.forbidden();
+
+    // ── 6b. Block if reconnect required ──────────────────────────
+    if (acct.reconnect_required) {
+      console.log(`[snapshot-continue] Job ${job.id} blocked: account ${acct.id} requires reconnect`);
+      // Silently end the job — user sees tracking-paused state, not an error
+      await db.from("snapshot_jobs").update({
+        status: "failed",
+        error: "Tracking paused — reconnect Instagram to resume",
+        failure_code: "RECONNECT_REQUIRED",
+        completed_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      }).eq("id", job.id).eq("status", "running");
+      return jsonResponse({
+        jobId: job.id, status: "failed", phase: job.phase,
+        pagesDone: job.pages_done,
+        followersSeen: (job.followers_json as unknown[]).length,
+        followingSeen: (job.following_json as unknown[]).length,
+        done: true,
+        reconnect_required: true,
+        tracking_state: "tracking_paused_reconnect_required",
+        message: "Tracking is paused until you reconnect Instagram.",
+      });
+    }
+
     if (!acct.vault_secret_id) throw Errors.igSessionInvalid();
 
     const cookie = await vaultRetrieve(acct.vault_secret_id);
@@ -167,31 +193,23 @@ Deno.serve(async (req: Request) => {
       await releaseJobLock(db, job.id, "client").catch(() => {});
     }
 
-    // Mark IG account suspended if session died mid-job
-    if (result.status === 'failed' && result.message &&
-      (result.message.includes("SESSION_EXPIRED") || result.message.includes("CHALLENGE_REQUIRED")
-       || result.message.includes("CHECKPOINT_REQUIRED"))) {
-      await db
-        .from("ig_accounts")
-        .update({ status: "token_expired", updated_at: new Date().toISOString() })
-        .eq("id", job.ig_account_id)
-        .then(undefined, () => {});
-    }
-
-    // Extend cooldown for any Instagram-related failure to prevent immediate retry.
-    // 1 hour for explicit rate-limit, 30 minutes for other IG failures.
-    const IG_FAILURE_PATTERNS = ["IG_RATE_LIMITED", "SESSION_EXPIRED", "CHALLENGE_REQUIRED",
-      "CHECKPOINT_REQUIRED", "SUSPICIOUS_RESPONSE", "IG_SESSION_INVALID"];
-    if (result.status === 'failed' && result.message &&
-        IG_FAILURE_PATTERNS.some(p => result.message!.includes(p))) {
-      const isRateLimit = result.message.includes("IG_RATE_LIMITED");
-      const cooldownMs = isRateLimit ? 60 * 60 * 1_000 : 30 * 60 * 1_000;
-      const extendedAt = new Date(Date.now() + cooldownMs).toISOString();
-      await db
-        .from("ig_accounts")
-        .update({ last_snapshot_at: extendedAt, updated_at: new Date().toISOString() })
-        .eq("id", job.ig_account_id)
-        .then(undefined, () => {});
+    // ── Post-chunk failure handling ────────────────────────────────
+    // snapshotJob.ts now handles reconnect marking and progress
+    // persistence internally. We only need to extend cooldowns here
+    // for non-auth IG failures.
+    if (result.status === 'failed' && result.message) {
+      const IG_FAILURE_PATTERNS = ["IG_RATE_LIMITED", "SESSION_EXPIRED", "CHALLENGE_REQUIRED",
+        "CHECKPOINT_REQUIRED", "SUSPICIOUS_RESPONSE", "IG_SESSION_INVALID"];
+      if (IG_FAILURE_PATTERNS.some(p => result.message!.includes(p))) {
+        const isRateLimit = result.message.includes("IG_RATE_LIMITED");
+        const cooldownMs = isRateLimit ? 60 * 60 * 1_000 : 30 * 60 * 1_000;
+        const extendedAt = new Date(Date.now() + cooldownMs).toISOString();
+        await db
+          .from("ig_accounts")
+          .update({ last_snapshot_at: extendedAt, updated_at: new Date().toISOString() })
+          .eq("id", job.ig_account_id)
+          .then(undefined, () => {});
+      }
     }
 
     // Notify owner if the job failed for a non-trivial reason

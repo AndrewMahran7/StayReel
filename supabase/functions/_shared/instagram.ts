@@ -23,6 +23,49 @@
 import { AppError, Errors } from "./errors.ts";
 
 // ─────────────────────────────────────────────────────────────
+// Failure classification (semantic categories)
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * Semantic failure category for structured logging and branching.
+ * Maps raw Instagram FailureCodes to actionable categories.
+ */
+export type FailureCategory =
+  | "session_expired"
+  | "checkpoint_or_challenge"
+  | "rate_limited"
+  | "temporary_network_failure"
+  | "unknown_fetch_error";
+
+/**
+ * Classify a raw FailureCode into a semantic category.
+ * Used by the snapshot pipeline to decide whether to mark an account
+ * as needing reconnect vs. just retrying later.
+ */
+export function classifyFetchFailure(code: FailureCode | string): FailureCategory {
+  switch (code) {
+    case "SESSION_EXPIRED":
+    case "IG_SESSION_INVALID":
+      return "session_expired";
+    case "CHALLENGE_REQUIRED":
+    case "CHECKPOINT_REQUIRED":
+    case "IG_CHALLENGE_REQUIRED":
+      return "checkpoint_or_challenge";
+    case "IG_RATE_LIMITED":
+      return "rate_limited";
+    case "NETWORK_ERROR":
+      return "temporary_network_failure";
+    default:
+      return "unknown_fetch_error";
+  }
+}
+
+/** Returns true if this failure category means the IG session is dead and reconnect is required. */
+export function requiresReconnect(category: FailureCategory): boolean {
+  return category === "session_expired" || category === "checkpoint_or_challenge";
+}
+
+// ─────────────────────────────────────────────────────────────
 // Failure mode catalogue
 // ─────────────────────────────────────────────────────────────
 
@@ -234,8 +277,8 @@ export function assignDeviceProfile(): DeviceProfile {
 
 /** Hard page cap per direction per run.
  *  big_list accounts return ~20 users/page on the followers endpoint,
- *  so 800 followers needs ~40 pages. 60 handles up to ~1 200 followers. */
-const MAX_PAGES = 60;
+ *  so 800 followers needs ~40 pages. 120 handles up to ~2 400 followers. */
+const MAX_PAGES = 120;
 const PAGE_SIZE = 200;
 
 const BACKOFF_BASE_MS = 2_000;
@@ -243,9 +286,11 @@ const BACKOFF_MAX_MS  = 32_000;
 const BACKOFF_JITTER  = 1_000;
 const MAX_RETRIES     = 2;
 
-/** Polite inter-page pause: 10 000–15 000 ms randomised. */
-const PAGE_DELAY_MIN  = 10_000;
-const PAGE_DELAY_MAX  = 15_000;
+/** Polite inter-page pause: 4 000–6 000 ms randomised.
+ *  Reduced from 10–15 s to double throughput per invocation.
+ *  ultraSafe mode still uses 12–18 s for first-ever snapshots. */
+const PAGE_DELAY_MIN  = 4_000;
+const PAGE_DELAY_MAX  = 6_000;
 
 /** Start-delay for the second parallel direction. Separates the first page
  *  requests so Instagram doesn't see a simultaneous burst from the same session.
@@ -388,6 +433,26 @@ async function igGetWithRetry(url: string, cookie: string, device?: DeviceProfil
     await sleep(delay);
     attempt++;
   }
+}
+
+// ─────────────────────────────────────────────────────────────
+// Lightweight session precheck
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * Lightweight auth precheck: makes a single cheap API call to verify
+ * the cookie is still valid. Returns the FailureCode if invalid, or null if OK.
+ *
+ * Used at the start of each snapshot-continue invocation to abort early
+ * instead of wasting time paginating with a dead session.
+ */
+export async function precheckSession(
+  cookie: string,
+  device?: DeviceProfile,
+): Promise<FailureCode | null> {
+  const result = await igGet(`${IG_API}/accounts/current_user/?edit=true`, cookie, device);
+  if (result.ok) return null;
+  return result.failureCode;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -599,7 +664,7 @@ export async function fetchEdgeListChunked(
   const {
     startCursor = null,
     timeBudgetMs = 70_000,
-    maxPages = 50,
+    maxPages = 80,
     rankToken: providedRankToken,
     deviceProfile,
     skipWarmup = false,
@@ -607,9 +672,9 @@ export async function fetchEdgeListChunked(
   } = options;
 
   // Ultra-safe mode: longer delays + lower page cap for first-ever snapshots.
-  const pageDelayMin     = ultraSafe ? 18_000 : PAGE_DELAY_MIN;
-  const pageDelayMax     = ultraSafe ? 25_000 : PAGE_DELAY_MAX;
-  const effectiveMaxPages = ultraSafe ? Math.min(maxPages, 20) : maxPages;
+  const pageDelayMin     = ultraSafe ? 12_000 : PAGE_DELAY_MIN;
+  const pageDelayMax     = ultraSafe ? 18_000 : PAGE_DELAY_MAX;
+  const effectiveMaxPages = ultraSafe ? Math.min(maxPages, 30) : maxPages;
 
   const deadline   = Date.now() + timeBudgetMs;
   const rankToken  = providedRankToken ?? newRankToken(igUserId);

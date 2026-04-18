@@ -20,47 +20,18 @@ interface ErrorProfile {
   title:   string;
   body:    string;
   steps:   string[];
-  /** If true, show a "Reconnect Instagram" button */
-  needsReconnect: boolean;
   /** If true, show a Sign Out button */
   needsSignOut: boolean;
   /** If true, this is user-fixable; hide the "developers working on it" note */
   isKnown: boolean;
 }
 
+// Reconnect-required codes (SESSION_EXPIRED, IG_SESSION_INVALID,
+// CHALLENGE_REQUIRED, CHECKPOINT_REQUIRED, IG_CHALLENGE_REQUIRED) are
+// intentionally NOT listed here. Those are handled entirely by the
+// dashboard's reconnect banner/state — never by SnapshotErrorCard.
+
 const PROFILES: Record<string, ErrorProfile> = {
-  SESSION_EXPIRED: {
-    icon:    'log-in-outline',
-    color:   C.amber,
-    bgColor: C.amberDim,
-    title:   'Instagram session expired',
-    body:    'Your Instagram login session expired — this happens every few weeks or when you log out of Instagram.',
-    steps: [
-      'Open StayReel Settings (bottom-right tab).',
-      'Tap Reconnect Instagram.',
-      'Log in all the way to your Instagram home feed inside the app.',
-      'Tap "Connect this account" and you\'re set.',
-    ],
-    needsReconnect: true,
-    needsSignOut:   false,
-    isKnown:        true,
-  },
-  IG_SESSION_INVALID: {
-    icon:    'log-in-outline',
-    color:   C.amber,
-    bgColor: C.amberDim,
-    title:   'Instagram session invalid',
-    body:    'StayReel could not authenticate with Instagram. Your session may have been revoked.',
-    steps: [
-      'Open StayReel Settings and tap Reconnect Instagram.',
-      'Make sure you log in all the way — don\'t stop at the username/password screen.',
-      'Complete any two-factor authentication prompt.',
-      'Wait until you see your Instagram home feed, then tap Connect.',
-    ],
-    needsReconnect: true,
-    needsSignOut:   false,
-    isKnown:        true,
-  },
   UNAUTHORIZED: {
     icon:    'person-circle-outline',
     color:   C.amber,
@@ -72,55 +43,7 @@ const PROFILES: Record<string, ErrorProfile> = {
       'Sign back in with your email.',
       'Run your snapshot again.',
     ],
-    needsReconnect: false,
     needsSignOut:   true,
-    isKnown:        true,
-  },
-  CHALLENGE_REQUIRED: {
-    icon:    'shield-outline',
-    color:   '#f5a623',
-    bgColor: '#1a1008',
-    title:   'Instagram needs you to verify',
-    body:    'Instagram flagged unusual activity on your account. This is a routine security check — nothing to worry about.',
-    steps: [
-      'Open the Instagram app on your phone.',
-      'Complete the verification (email, SMS, or selfie).',
-      'Come back to StayReel and tap "Reconnect Instagram" below.',
-      'Log in and tap Connect — you\'re all set!',
-    ],
-    needsReconnect: true,
-    needsSignOut:   false,
-    isKnown:        true,
-  },
-  CHECKPOINT_REQUIRED: {
-    icon:    'shield-outline',
-    color:   '#f5a623',
-    bgColor: '#1a1008',
-    title:   'Instagram security checkpoint',
-    body:    'Instagram wants to confirm this is really you. This is normal and usually only takes a minute.',
-    steps: [
-      'Open the Instagram app and follow the checkpoint instructions.',
-      'Wait 15–30 minutes after completing it.',
-      'Come back to StayReel and tap "Reconnect Instagram" below.',
-      'Log in and tap Connect — you\'re all set!',
-    ],
-    needsReconnect: true,
-    needsSignOut:   false,
-    isKnown:        true,
-  },
-  IG_CHALLENGE_REQUIRED: {
-    icon:    'shield-outline',
-    color:   '#f5a623',
-    bgColor: '#1a1008',
-    title:   'Instagram verification required',
-    body:    'Instagram is asking to confirm this is really you. This is a routine security check.',
-    steps: [
-      'Open the Instagram app and complete the security check.',
-      'Come back to StayReel and tap "Reconnect Instagram" below.',
-      'Log in and tap Connect — you\'re all set!',
-    ],
-    needsReconnect: true,
-    needsSignOut:   false,
     isKnown:        true,
   },
   IG_RATE_LIMITED: {
@@ -134,7 +57,6 @@ const PROFILES: Record<string, ErrorProfile> = {
       'Do not keep retrying — it makes the throttle last longer.',
       'Make sure you\'re within your 3-snapshot daily limit.',
     ],
-    needsReconnect: false,
     needsSignOut:   false,
     isKnown:        true,
   },
@@ -148,7 +70,6 @@ const PROFILES: Record<string, ErrorProfile> = {
       'Wait 30–60 minutes and try again.',
       'If it keeps happening, try reconnecting Instagram in Settings.',
     ],
-    needsReconnect: false,
     needsSignOut:   false,
     isKnown:        true,
   },
@@ -163,7 +84,19 @@ const PROFILES: Record<string, ErrorProfile> = {
       'Pull down to refresh — your snapshot may already be finished.',
       'If you just reopened the app, your results should appear shortly.',
     ],
-    needsReconnect: false,
+    needsSignOut:   false,
+    isKnown:        true,
+  },
+  SNAPSHOT_LIMIT: {
+    icon:    'time-outline',
+    color:   C.teal,
+    bgColor: C.tealDim,
+    title:   'Too soon for another snapshot',
+    body:    'Your previous snapshot just finished. StayReel spaces out snapshots to protect your Instagram account.',
+    steps: [
+      'Wait for the countdown timer on the dashboard.',
+      'Your latest results are already loaded — pull down to refresh.',
+    ],
     needsSignOut:   false,
     isKnown:        true,
   },
@@ -176,7 +109,6 @@ const UNKNOWN_PROFILE: ErrorProfile = {
   title:          'Something went wrong',
   body:           'An unexpected error occurred during your snapshot. This isn\'t something you did — our team has been automatically notified.',
   steps:          [],
-  needsReconnect: false,
   needsSignOut:   false,
   isKnown:        false,
 };
@@ -195,6 +127,11 @@ export function SnapshotErrorCard({ error, onDismiss }: Props) {
 
   const code    = error instanceof SnapshotError ? error.code : 'INTERNAL_ERROR';
   const profile = PROFILES[code] ?? UNKNOWN_PROFILE;
+  const isKnownCode = code in PROFILES;
+  console.log('[SnapshotErrorCard] Rendering — code:', code,
+    '| mapped:', isKnownCode ? 'yes' : 'FALLBACK',
+    '| error.name:', error.name,
+    '| msg:', error.message?.slice(0, 80));
 
   const handleSignOut = async () => {
     await supabase.auth.signOut();
@@ -234,19 +171,6 @@ export function SnapshotErrorCard({ error, onDismiss }: Props) {
               </View>
             ))}
           </View>
-        )}
-
-        {/* Reconnect CTA — clears local igAccountId so AuthGuard
-            redirects straight to the connect-instagram flow. */}
-        {profile.needsReconnect && (
-          <TouchableOpacity
-            style={[styles.reconnectBtn, { backgroundColor: profile.color }]}
-            onPress={() => setIgAccountId(null)}
-            activeOpacity={0.85}
-          >
-            <Ionicons name="logo-instagram" size={15} color="#fff" style={{ marginRight: 6 }} />
-            <Text style={styles.reconnectText}>Reconnect Instagram</Text>
-          </TouchableOpacity>
         )}
 
         {/* Sign out CTA */}

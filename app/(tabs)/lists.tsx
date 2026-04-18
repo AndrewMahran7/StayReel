@@ -25,6 +25,7 @@ import { UserListItem }         from '@/components/UserListItem';
 import { LockedUserRow }        from '@/components/LockedUserRow';
 import { PaywallModal }         from '@/components/PaywallModal';
 import { trackEvent }           from '@/lib/analytics';
+import { isBetaActive }         from '@/lib/betaAccess';
 import C from '@/lib/colors';
 
 /** Contextual upsell copy per list type — short, emotionally relevant. */
@@ -87,7 +88,7 @@ export default function ListsScreen() {
     if (type === activeType) return;
     setActiveType(type);
     setSearch('');
-    trackEvent('list_opened', { list_type: type });
+    trackEvent('list_opened', { list_type: type, beta: isBetaActive() });
   }, [activeType]);
 
   const items: IgUser[] = data?.pages.flatMap((p: { items: IgUser[] }) => p.items) ?? [];
@@ -212,6 +213,11 @@ export default function ListsScreen() {
       {/* Screen title */}
       <View style={styles.titleRow}>
         <Text style={styles.screenTitle}>Lists</Text>
+        {isBetaActive() && (
+          <View style={styles.betaChip}>
+            <Text style={styles.betaChipText}>BETA ACCESS</Text>
+          </View>
+        )}
         {isLoading && <ActivityIndicator size="small" color={C.accent} />}
       </View>
 
@@ -300,6 +306,19 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     letterSpacing: -0.5,
     flex: 1,
+  },
+  betaChip: {
+    backgroundColor: C.accentDim,
+    borderRadius:    8,
+    paddingVertical:  3,
+    paddingHorizontal: 8,
+    marginRight:     4,
+  },
+  betaChipText: {
+    color:        C.accent,
+    fontSize:     10,
+    fontWeight:   '700',
+    letterSpacing: 0.8,
   },
   tabList: {
     paddingHorizontal: 12,

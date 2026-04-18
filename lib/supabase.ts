@@ -17,14 +17,24 @@ export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON, {
     autoRefreshToken: true,
     persistSession: true,
     detectSessionInUrl: false,   // handled manually below
-    flowType: 'pkce',
+    // Use implicit flow for mobile magic links. PKCE requires the same
+    // process that called signInWithOtp() to also receive the callback
+    // (it stores a code_verifier in AsyncStorage). On iOS the magic link
+    // opens Safari first → Supabase server → redirect back to the app,
+    // which is a different context. If iOS killed the app in between, or
+    // the user requested a second link, the verifier is gone and the
+    // exchange fails with "PKCE code verifier not found in storage".
+    // Implicit flow sends token_hash + type params instead, which are
+    // self-contained and don't need stored state.
+    flowType: 'implicit',
   },
 });
 
 // ── Deep-link helpers ───────────────────────────────────────────────
-// Track the last code we attempted so duplicate exchange calls (root
-// layout + auth.tsx) don't race and burn the single-use PKCE code.
+// Track the last code/token we attempted so duplicate exchange calls
+// (root layout + auth.tsx) don't race and burn the single-use token.
 let _lastExchangedCode: string | null = null;
+let _lastVerifiedHash:  string | null = null;
 
 // Handle deep-link callbacks (magic link, OAuth redirect).
 // Called from the root layout bootstrap (cold start) and the warm-start
@@ -48,7 +58,34 @@ export async function handleAuthDeepLink(url: string | null): Promise<boolean> {
     return false;
   }
 
-  // ── PKCE flow: code in query params ────────────────────────────
+  // ── Token-hash flow (implicit / magic-link) ───────────────────
+  // Implicit flow sends token_hash + type as query params. This is the
+  // primary path for mobile magic-link auth.
+  const tokenHash = queryParams?.token_hash as string | undefined;
+  const type      = queryParams?.type as string | undefined;
+  if (tokenHash && type) {
+    if (tokenHash === _lastVerifiedHash) {
+      console.log('[Auth] token_hash already verified, skipping duplicate');
+      return false;
+    }
+    _lastVerifiedHash = tokenHash;
+    console.log('[Auth] Verifying OTP via token_hash (type:', type, ')…');
+    const { error } = await supabase.auth.verifyOtp({
+      token_hash: tokenHash,
+      type: type as 'magiclink' | 'signup' | 'invite' | 'recovery' | 'email',
+    });
+    if (error) {
+      console.warn('[Auth] verifyOtp failed:', error.message);
+      _lastVerifiedHash = null; // allow retry
+      return false;
+    }
+    console.log('[Auth] verifyOtp succeeded');
+    return true;
+  }
+
+  // ── PKCE fallback: code in query params ────────────────────────
+  // Kept for backwards compatibility if any existing emails in users'
+  // inboxes still carry a PKCE code from before the flow change.
   const code = (queryParams?.code as string) ?? null;
   if (code) {
     if (code === _lastExchangedCode) {
@@ -56,7 +93,7 @@ export async function handleAuthDeepLink(url: string | null): Promise<boolean> {
       return false;
     }
     _lastExchangedCode = code;
-    console.log('[Auth] Exchanging PKCE code for session…');
+    console.log('[Auth] Exchanging PKCE code for session (legacy)…');
     const { error } = await supabase.auth.exchangeCodeForSession(code);
     if (error) {
       console.warn('[Auth] Code exchange failed:', error.message);
@@ -64,23 +101,6 @@ export async function handleAuthDeepLink(url: string | null): Promise<boolean> {
       return false;
     }
     console.log('[Auth] Code exchange succeeded');
-    return true;
-  }
-
-  // ── Token-hash fallback (non-PKCE verify, e.g. email change) ──
-  const tokenHash = queryParams?.token_hash as string | undefined;
-  const type      = queryParams?.type as string | undefined;
-  if (tokenHash && type) {
-    console.log('[Auth] Verifying OTP via token_hash…');
-    const { error } = await supabase.auth.verifyOtp({
-      token_hash: tokenHash,
-      type: type as 'magiclink' | 'signup' | 'invite' | 'recovery' | 'email',
-    });
-    if (error) {
-      console.warn('[Auth] verifyOtp failed:', error.message);
-      return false;
-    }
-    console.log('[Auth] verifyOtp succeeded');
     return true;
   }
 

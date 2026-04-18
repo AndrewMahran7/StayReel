@@ -17,6 +17,13 @@ const PAGE_SIZE = 50;
 /** Number of preview items free users can see per list. */
 const FREE_PREVIEW_LIMIT = 10;
 
+/**
+ * Beta access: set to `true` to grant all users Pro-level list access.
+ * Mirror of the client-side flag in lib/betaAccess.ts.
+ * Set to `false` to restore normal freemium gating.
+ */
+const BETA_ACCESS_ENABLED = true;
+
 type ListType =
   | "new_followers"
   | "lost_followers"
@@ -144,7 +151,7 @@ Deno.serve(async (req: Request) => {
     // Active promo that hasn't expired grants Pro access
     const promoActive = promoUntil && new Date(promoUntil) > new Date();
 
-    const subActive   = promoActive || (
+    const subActive   = BETA_ACCESS_ENABLED || promoActive || (
       profile
       && ["active", "trial"].includes(dbStatus ?? "")
       && (!dbExpiresAt || new Date(dbExpiresAt) > new Date())
@@ -159,7 +166,7 @@ Deno.serve(async (req: Request) => {
     }
 
     // ── Gating diagnostic (always logged — cheap, invaluable for debugging) ──
-    console.log(`[list-users] gating: user=${caller.userId} status=${dbStatus} expires=${dbExpiresAt} subActive=${subActive} isFree=${isFreeUser} total=${totalCount} sent=${allItems.length}`);
+    console.log(`[list-users] gating: user=${caller.userId} status=${dbStatus} expires=${dbExpiresAt} subActive=${subActive} isFree=${isFreeUser} beta=${BETA_ACCESS_ENABLED} total=${totalCount} sent=${allItems.length}`);
 
     // ── Paginate ──────────────────────────────────────────────
     const start    = page * PAGE_SIZE;

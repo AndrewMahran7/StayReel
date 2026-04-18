@@ -137,7 +137,7 @@ Deno.serve(async (req: Request) => {
     // ── 5. Load IG account ────────────────────────────────────
     const { data: igAccount, error: acctErr } = await db
       .from("ig_accounts")
-      .select("id, ig_user_id, username, vault_secret_id, status, device_ua, device_id, android_id")
+      .select("id, ig_user_id, username, vault_secret_id, status, device_ua, device_id, android_id, reconnect_required")
       .eq("id", igAccountId)
       .is("deleted_at", null)
       .single();
@@ -147,8 +147,19 @@ Deno.serve(async (req: Request) => {
       id: string; ig_user_id: string; username: string;
       vault_secret_id: string | null; status: string;
       device_ua: string | null; device_id: string | null; android_id: string | null;
+      reconnect_required: boolean;
     };
     if (acct.status === "suspended") throw Errors.forbidden();
+    if (acct.reconnect_required) {
+      // Return a structured product-state response — NOT an error.
+      // The client renders a calm "tracking paused" UX, not an error card.
+      return jsonResponse({
+        reconnect_required: true,
+        tracking_state: "tracking_paused_reconnect_required",
+        message: "Reconnect Instagram to keep tracking active.",
+        done: true,
+      });
+    }
     if (!acct.vault_secret_id) throw Errors.igSessionInvalid();
 
     const cookie = await vaultRetrieve(acct.vault_secret_id);

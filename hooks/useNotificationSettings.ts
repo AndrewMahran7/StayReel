@@ -10,17 +10,19 @@ import { useAuthStore } from '@/store/authStore';
 // ── Types ──────────────────────────────────────────────────────
 
 export interface NotificationPrefs {
-  notify_refresh_complete: boolean;
-  notify_weekly_summary:   boolean;
-  notify_on_unfollow:      boolean;
-  notify_on_token_expiry:  boolean;
+  notify_refresh_complete:      boolean;
+  notify_weekly_summary:        boolean;
+  notify_on_unfollow:           boolean;
+  notify_on_token_expiry:       boolean;
+  notify_on_meaningful_change:  boolean;
 }
 
 const DEFAULTS: NotificationPrefs = {
-  notify_refresh_complete: true,
-  notify_weekly_summary:   true,
-  notify_on_unfollow:      true,
-  notify_on_token_expiry:  true,
+  notify_refresh_complete:      true,
+  notify_weekly_summary:        true,
+  notify_on_unfollow:           true,
+  notify_on_token_expiry:       true,
+  notify_on_meaningful_change:  true,
 };
 
 const QUERY_KEY = 'notification-settings';
@@ -39,7 +41,7 @@ export function useNotificationSettings() {
       const { data, error } = await supabase
         .from('user_settings')
         .select(
-          'notify_refresh_complete, notify_weekly_summary, notify_on_unfollow, notify_on_token_expiry',
+          'notify_refresh_complete, notify_weekly_summary, notify_on_unfollow, notify_on_token_expiry, notify_on_meaningful_change',
         )
         .eq('user_id', userId!)
         .maybeSingle();
@@ -48,10 +50,11 @@ export function useNotificationSettings() {
       if (!data) return DEFAULTS;
 
       return {
-        notify_refresh_complete: data.notify_refresh_complete ?? DEFAULTS.notify_refresh_complete,
-        notify_weekly_summary:   data.notify_weekly_summary   ?? DEFAULTS.notify_weekly_summary,
-        notify_on_unfollow:      data.notify_on_unfollow      ?? DEFAULTS.notify_on_unfollow,
-        notify_on_token_expiry:  data.notify_on_token_expiry  ?? DEFAULTS.notify_on_token_expiry,
+        notify_refresh_complete:     data.notify_refresh_complete     ?? DEFAULTS.notify_refresh_complete,
+        notify_weekly_summary:       data.notify_weekly_summary       ?? DEFAULTS.notify_weekly_summary,
+        notify_on_unfollow:          data.notify_on_unfollow          ?? DEFAULTS.notify_on_unfollow,
+        notify_on_token_expiry:      data.notify_on_token_expiry      ?? DEFAULTS.notify_on_token_expiry,
+        notify_on_meaningful_change: data.notify_on_meaningful_change ?? DEFAULTS.notify_on_meaningful_change,
       };
     },
   });

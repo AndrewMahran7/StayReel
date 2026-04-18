@@ -2,7 +2,8 @@
 // Root layout: providers + auth state listener + deep-link handler.
 
 import 'react-native-url-polyfill/auto';
-import React, { useEffect } from 'react';
+import React, { useEffect, useRef } from 'react';
+import { AppState } from 'react-native';
 import { Stack, useRouter, useSegments } from 'expo-router';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
@@ -73,6 +74,29 @@ export default function RootLayout() {
   // Register push notifications + handle notification taps
   useNotifications();
 
+  // ── Track last_app_open_at + timezone on open and foreground ──
+  const appStateRef = useRef(AppState.currentState);
+  useEffect(() => {
+    const updatePresence = () => {
+      const userId = useAuthStore.getState().session?.user?.id;
+      if (!userId) return;
+      const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone ?? null;
+      supabase.from('profiles').update({
+        last_app_open_at: new Date().toISOString(),
+        ...(timezone ? { timezone } : {}),
+      }).eq('id', userId).then(() => {});
+    };
+    // Fire on mount (app open)
+    updatePresence();
+    // Fire on foreground (background → active)
+    const sub = AppState.addEventListener('change', (nextState) => {
+      const prev = appStateRef.current;
+      appStateRef.current = nextState;
+      if (nextState === 'active' && prev !== 'active') updatePresence();
+    });
+    return () => sub.remove();
+  }, []);
+
   // Bootstrap: load saved session
   useEffect(() => {
 
@@ -106,8 +130,8 @@ export default function RootLayout() {
     const bootstrap = async () => {
       try {
         // ── Step 1: Handle incoming deep link (magic-link callback) ──
-        // Process BEFORE reading the stored session so a fresh PKCE code
-        // exchange is reflected in the getSession() call that follows.
+        // Process BEFORE reading the stored session so a fresh token
+        // verification is reflected in the getSession() call that follows.
         // Race with an 8 s timeout so a slow network can't hang bootstrap.
         const initialUrl = await Linking.getInitialURL();
         console.log('[Auth] Bootstrap — initial URL:', initialUrl ?? 'none');
@@ -289,7 +313,7 @@ export default function RootLayout() {
     };
     const sub = Linking.addEventListener('url', handleUrl);
     // NOTE: getInitialURL is handled inside bootstrap above — do NOT
-    // call it again here to avoid a duplicate PKCE code exchange race.
+    // call it again here to avoid a duplicate token verification race.
 
     return () => {
       subscription.unsubscribe();

@@ -14,7 +14,7 @@ import {
   AppState,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useFocusEffect, useRouter } from 'expo-router';
+import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 
 import { useDashboard }                                          from '@/hooks/useDashboard';
@@ -31,14 +31,19 @@ import { SchoolPickerModal }                   from '@/components/SchoolPickerMo
 import { useAuthStore }                        from '@/store/authStore';
 import { useSubscriptionStore }                from '@/store/subscriptionStore';
 import { useSchoolPrompt }                     from '@/hooks/useSchoolPrompt';
+import { isBetaActive }                        from '@/lib/betaAccess';
 import C                                       from '@/lib/colors';
 import type { ListType }                       from '@/hooks/useListData';
 import { TapTheDotGameModal }                  from '@/components/TapTheDotGameModal';
 import { recordSuccessfulSnapshot }            from '@/hooks/useReviewPrompt';
 import { trackEvent }                          from '@/lib/analytics';
 import { reconcile }                           from '@/hooks/useSnapshotReconciliation';
+import { SnapshotStatusCard }                   from '@/components/SnapshotStatusCard';
+import { HowItWorksModal }                     from '@/components/HowItWorksModal';
+import { supabase }                            from '@/lib/supabase';
+import { useAutoSnapshotSetting }               from '@/hooks/useAutoSnapshotSetting';
 
-// â”€â”€ Countdown hook â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// Ã¢â€â‚¬Ã¢â€â‚¬ Countdown hook Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 function useCountdown(targetIso: string | null): string | null {
   const [label, setLabel] = useState<string | null>(null);
 
@@ -64,7 +69,7 @@ function useCountdown(targetIso: string | null): string | null {
   return label;
 }
 
-// â”€â”€ Card definitions â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// Ã¢â€â‚¬Ã¢â€â‚¬ Card definitions Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 const CARDS: {
   key:       ListType;
   title:     string;
@@ -88,7 +93,7 @@ const RECONNECT_CODES = new Set([
   'IG_SESSION_INVALID',
 ]);
 
-// â”€â”€ Screen â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// Ã¢â€â‚¬Ã¢â€â‚¬ Screen Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 export default function DashboardScreen() {
   const router                                 = useRouter();
   const { data, isLoading, refetch, error } = useDashboard();
@@ -100,7 +105,6 @@ export default function DashboardScreen() {
   const user                                   = useAuthStore((s) => s.user);
   const igAccountId                            = useAuthStore((s) => s.igAccountId);
   const pendingNotificationJobId               = useAuthStore((s) => s.pendingNotificationJobId);
-  const setPendingNotificationJobId            = useAuthStore((s) => s.setPendingNotificationJobId);
 
   // Subscription (freemium: snapshots always allowed, lists gated)
   const isPro               = useSubscriptionStore((s) => s.isPro);
@@ -110,6 +114,30 @@ export default function DashboardScreen() {
   // School attribution prompt (shown once for new users)
   const schoolPrompt = useSchoolPrompt();
 
+  // Auto-snapshot setting
+  const autoSnapshotSetting = useAutoSnapshotSetting();
+
+  // "How It Works" modal
+  const [howItWorksOpen, setHowItWorksOpen] = useState(false);
+
+  // Track last app open for auto-snapshot eligibility
+  useEffect(() => {
+    if (user?.id) {
+      supabase.from('profiles').update({
+        last_app_open_at: new Date().toISOString(),
+      }).eq('id', user.id).then(() => {});
+    }
+  }, [user?.id]);
+
+  // Track beta access messaging (once per mount)
+  const betaTrackedRef = useRef(false);
+  useEffect(() => {
+    if (isBetaActive() && !betaTrackedRef.current) {
+      betaTrackedRef.current = true;
+      trackEvent('beta_access_shown', { screen: 'dashboard' });
+    }
+  }, []);
+
   // "Tap the Dot" game modal
   const [gameOpen,       setGameOpen]       = useState(false);
   // snapshot completion state for game modal feedback
@@ -118,7 +146,7 @@ export default function DashboardScreen() {
   // track previous capturing so we detect the transition
   const wasCapturingRef = useRef(false);
 
-  // ── Reconciliation state ──────────────────────────────────────
+  // â”€â”€ Reconciliation state â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   // "Completed while away" banner (auto-dismisses after 5 s)
   const [completedWhileAway, setCompletedWhileAway] = useState(false);
   // Guard against duplicate reconciliation runs
@@ -136,12 +164,12 @@ export default function DashboardScreen() {
   const countdown      = useCountdown(nextAllowedAt);
   const isLimited      = countdown !== null;
 
-  // ── Staged progress narrative ─────────────────────────────────
+  // â”€â”€ Staged progress narrative â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   // Maps real job phase data to a 4-stage human-readable flow.
-  // Every label is truthful — no stage claims completion before its time.
+  // Every label is truthful â€” no stage claims completion before its time.
   const stage = (() => {
     const p = capture.progress;
-    // Queued state: job is waiting for a concurrency slot — show an
+    // Queued state: job is waiting for a concurrency slot â€” show an
     // honest "waiting" stage instead of pretending to scan.
     if (p.queued) {
       return {
@@ -193,29 +221,53 @@ export default function DashboardScreen() {
     if (data?.next_snapshot_allowed_at === null) setOverrideNextAt(null);
   }, [data?.next_snapshot_allowed_at]);
 
-  // The tab navigator keeps this screen alive across sign-out → sign-in,
-  // so capture.error can persist from a previous session. Clear it whenever
-  // the screen comes back into focus so a returning user never sees a stale
-  // error card from a session that has since been replaced.
-  useFocusEffect(
-    useCallback(() => {
-      capture.clearError();
-    }, []),
-  );
+  // The tab navigator keeps this screen alive across sign-out â†’ sign-in,
+  // so capture.error can persist from a previous session.
+  // useSnapshotCapture already clears the error when igAccountId changes,
+  // which covers the cross-session case. We intentionally do NOT clear
+  // the error on every focus event â€” that would race with reconciliation
+  // and erase errors the user needs to see.
 
-  // ── Reconciliation: backend is source of truth ──────────────────
+  // â”€â”€ Reconciliation: backend is source of truth â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   // On mount, foreground resume, or notification tap, check the server
   // for the real job state and act accordingly.
+  //
+  // LIFECYCLE ORDERING (cold-start from notification):
+  //   1. _layout.tsx mounts â†’ useNotifications runs
+  //   2. getLastNotificationResponseAsync() fires (async Promise)
+  //   3. AuthGuard routes to dashboard â†’ mount effect fires
+  //   4. Step 2 may or may not have resolved by step 3 â€” so we absorb
+  //      the notification jobId from the store at reconciliation entry
+  //      rather than relying on React effect ordering.
+  //   5. If the Promise resolves while reconciliation is in-flight, the
+  //      drain check after the mutex release picks it up.
   const runReconciliation = useCallback(async (targetJobId?: string) => {
-    if (!igAccountId || isReconciling.current) return;
+    if (!igAccountId || isReconciling.current) {
+      console.log('[dashboard] Reconciliation skipped â€”',
+        !igAccountId ? 'no igAccountId' : 'already in progress');
+      return;
+    }
+
+    // Absorb any pending notification jobId from the store. This avoids
+    // timing races with the async getLastNotificationResponseAsync() call
+    // and the React effect that watches pendingNotificationJobId.
+    if (!targetJobId) {
+      const storeState = useAuthStore.getState();
+      if (storeState.pendingNotificationJobId) {
+        targetJobId = storeState.pendingNotificationJobId;
+        storeState.setPendingNotificationJobId(null);
+        console.log('[dashboard] Reconciliation: absorbed notification jobId from store:', targetJobId);
+      }
+    }
+
     isReconciling.current = true;
     try {
-      console.log('[dashboard] Running reconciliation…');
+      console.log('[dashboard] Reconciliation: start', targetJobId ? `(jobId: ${targetJobId})` : '(latest)');
       const action = await reconcile(igAccountId, capture.isPending, targetJobId);
+      console.log('[dashboard] Reconciliation: result â†’', action.type);
 
       switch (action.type) {
         case 'completed_while_away':
-          console.log('[dashboard] Reconciliation: snapshot completed while away');
           capture.clearError();
           setCompletedWhileAway(true);
           setTimeout(() => setCompletedWhileAway(false), 6_000);
@@ -228,19 +280,26 @@ export default function DashboardScreen() {
           // existing running job via snapshot-start.
           console.log('[dashboard] Reconciliation: auto-resuming job', action.jobId);
           capture.clearError();
-          capture.mutateAsync().catch(() => {});
+          capture.mutateAsync().catch((err) => {
+            // The job likely completed between the reconciliation check
+            // and the startJob call â€” server returns a rate-limit error
+            // for the "new" snapshot since last_snapshot_at was just set.
+            // Clear the stale capture error and refresh dashboard data
+            // to reflect the completed job.
+            console.log('[dashboard] Auto-resume failed:', (err as Error).message, 'â€” clearing error & refetching');
+            capture.clearError();
+            refetch();
+          });
           break;
 
         case 'failed':
-          // Show the server's typed failure, not a stale client error.
-          console.log('[dashboard] Reconciliation: job failed —', action.failureCode);
+          console.log('[dashboard] Reconciliation: job failed â€” code:', action.failureCode, '| msg:', action.error);
           capture.setExternalError(
             new SnapshotError(action.failureCode, action.error),
           );
           break;
 
         case 'stale_cleared':
-          console.log('[dashboard] Reconciliation: stale local state cleared');
           capture.clearError();
           refetch();
           break;
@@ -253,43 +312,54 @@ export default function DashboardScreen() {
       console.warn('[dashboard] Reconciliation error:', (err as Error).message);
     } finally {
       isReconciling.current = false;
-      // Mark the initial gate as open so error UI can render.
       if (!reconciliationDone) setReconciliationDone(true);
+    }
+
+    // DRAIN: if a notification tap arrived while the mutex was held
+    // (e.g. getLastNotificationResponseAsync resolved mid-reconcile),
+    // process it now. Safe from infinite recursion because the drain
+    // clears the jobId before re-entering.
+    const drainJobId = useAuthStore.getState().pendingNotificationJobId;
+    if (drainJobId) {
+      console.log('[dashboard] Reconciliation drain: processing queued notification jobId:', drainJobId);
+      useAuthStore.getState().setPendingNotificationJobId(null);
+      return runReconciliation(drainJobId);
     }
   }, [igAccountId, capture.isPending, capture, refetch, reconciliationDone]);
 
-  // Run reconciliation on initial mount (cold launch)
+  // Mount: run reconciliation. Any pending notification jobId is absorbed
+  // inside runReconciliation (reads from store directly).
   useEffect(() => {
     runReconciliation();
   }, [igAccountId]);
 
-  // Run reconciliation when app foregrounds (active → background → active)
+  // Foreground resume: run reconciliation on background â†’ active transition.
   useEffect(() => {
     const sub = AppState.addEventListener('change', (nextState) => {
       const prevState = appStateRef.current;
       appStateRef.current = nextState;
 
       if (nextState === 'active' && prevState !== 'active') {
-        console.log(`[dashboard] App foregrounded (${prevState} → ${nextState})`);
+        console.log(`[dashboard] App foregrounded (${prevState} â†’ ${nextState})`);
         runReconciliation();
-      } else if (nextState !== 'active' && prevState === 'active') {
-        console.log(`[dashboard] App backgrounded (${prevState} → ${nextState})`);
       }
     });
     return () => sub.remove();
   }, [runReconciliation]);
 
-  // React to notification-tap jobId (set by useNotifications)
+  // Warm-start notification tap: useNotifications sets the jobId in the
+  // store while the app is already running. This effect triggers
+  // reconciliation â€” the jobId is absorbed from the store inside
+  // runReconciliation, not consumed here, so nothing is lost if the
+  // mutex is held.
   useEffect(() => {
     if (pendingNotificationJobId) {
-      console.log('[dashboard] Consuming pending notification jobId:', pendingNotificationJobId);
-      const jobId = pendingNotificationJobId;
-      setPendingNotificationJobId(null);
-      runReconciliation(jobId);
+      console.log('[dashboard] Notification jobId detected:', pendingNotificationJobId);
+      runReconciliation();
     }
-  }, [pendingNotificationJobId, runReconciliation, setPendingNotificationJobId]);
+  }, [pendingNotificationJobId, runReconciliation]);
 
-  // Detect snapshot finish → update modal feedback flags
+  // Detect snapshot finish â†’ update modal feedback flags
   useEffect(() => {
     const isNowCapturing = capturing || capture.isPending;
     if (wasCapturingRef.current && !isNowCapturing) {
@@ -315,13 +385,13 @@ export default function DashboardScreen() {
   const handleCapture = async () => {
     if (isLimited) return;
 
-    // Paywall gate removed — freemium model allows unlimited snapshots.
+    // Paywall gate removed â€” freemium model allows unlimited snapshots.
     // Lists are gated instead.
 
     await new Promise<void>((resolve) =>
       Alert.alert(
         'This takes a few minutes',
-        "We fetch your followers slowly on purpose — it keeps your Instagram account safe.\n\nNote: Instagram may occasionally ask you to re-verify your account during or after a snapshot. This is normal and doesn't mean anything is wrong.\n\nWhile you wait, play Tap the Dot! 🙏",
+        "We fetch your followers slowly on purpose â€” it keeps your Instagram account safe.\n\nNote: Instagram may occasionally ask you to re-verify your account during or after a snapshot. This is normal and doesn't mean anything is wrong.\n\nWhile you wait, play Tap the Dot! ðŸ™",
         [{ text: 'Got it, let\'s go!', onPress: () => resolve() }],
         { cancelable: false },
       )
@@ -355,7 +425,7 @@ export default function DashboardScreen() {
         setOverrideNextAt(err.nextAllowedAt);
       }
       // All other errors: capture.error is already set by the hook and
-      // shown inline via SnapshotErrorCard — no Alert needed.
+      // shown inline via SnapshotErrorCard â€” no Alert needed.
     } finally {
       setCapturing(false);
     }
@@ -387,7 +457,7 @@ export default function DashboardScreen() {
           />
         }
       >
-        {/* â”€â”€ Header â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
+        {/* Ã¢â€â‚¬Ã¢â€â‚¬ Header Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬ */}
         {/* Offline banner */}
         {isOffline && data && (
           <View style={styles.offlineBanner}>
@@ -403,7 +473,7 @@ export default function DashboardScreen() {
           <View style={styles.completedAwayBanner}>
             <Ionicons name="checkmark-circle" size={16} color={C.green} />
             <Text style={styles.completedAwayText}>
-              Snapshot finished while you were away — results updated!
+              Snapshot finished while you were away â€” results updated!
             </Text>
           </View>
         )}
@@ -463,10 +533,21 @@ export default function DashboardScreen() {
             ? `Daily limit reached (${data?.snapshots_today ?? 3} of 3 today). Resets in ${countdown}.`
             : isLimited
             ? `Next snapshot available in ${countdown}.`
-            : 'Up to 3 snapshots per day, 1 per hour — keeps your account safe.'}
+            : 'Up to 3 snapshots per day, 1 per hour â€” keeps your account safe.'}
         </Text>
 
-        {/* ── Snapshot progress card ────────────────────────────────── */}
+        {/* â”€â”€ Snapshot status card â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
+        {data && !capturing && !capture.isPending && (
+          <SnapshotStatusCard
+            lastSnapshotAt={data.to_captured_at ?? null}
+            snapshotsToday={data.snapshots_today ?? 0}
+            dailyCap={3}
+            autoSnapshotEnabled={autoSnapshotSetting.enabled}
+            isCapturing={false}
+          />
+        )}
+
+        {/* â”€â”€ Snapshot progress card â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
         {(capturing || capture.isPending) && (
           <View style={styles.progressCard}>
             {/* keep-open warning */}
@@ -476,11 +557,11 @@ export default function DashboardScreen() {
                 {capture.progress.resumed
                   ? 'Resuming your snapshot from where it paused. '
                   : 'Scanning slowly to protect your Instagram account. '}
-                You can switch apps — your progress is saved. Instagram may occasionally ask you to re-verify; this is normal.
+                You can switch apps â€” your progress is saved. Instagram may occasionally ask you to re-verify; this is normal.
               </Text>
             </View>
 
-            {/* Step indicators — 4 dots showing which stage we're on */}
+            {/* Step indicators â€” 4 dots showing which stage we're on */}
             <View style={styles.stepsRow}>
               {(capture.progress.resumed
                 ? ['Resuming', 'Scanning', 'Comparing', 'Building']
@@ -528,9 +609,9 @@ export default function DashboardScreen() {
               <View style={[styles.progressBarFill, { width: `${Math.round(stage.pct * 100)}%` }]} />
             </View>
 
-            {/* Live confirmed "doesn't follow back" count — only visible once
+            {/* Live confirmed "doesn't follow back" count â€” only visible once
                 followers phase is fully done and following scan has begun.
-                Stays hidden during followers phase — no speculative results. */}
+                Stays hidden during followers phase â€” no speculative results. */}
             {capture.progress.partialResultsReady && !capture.progress.queued && (
               <View style={styles.partialNfbRow}>
                 <Ionicons
@@ -556,7 +637,7 @@ export default function DashboardScreen() {
               <View style={styles.cachedFollowingRow}>
                 <Ionicons name="shield-checkmark-outline" size={14} color={C.teal} style={{ marginRight: 6 }} />
                 <Text style={styles.cachedFollowingText}>
-                  Using your following list from earlier today — refreshed once daily to keep your account safe.
+                  Using your following list from earlier today â€” refreshed once daily to keep your account safe.
                 </Text>
               </View>
             )}
@@ -579,7 +660,7 @@ export default function DashboardScreen() {
           </View>
         )}
 
-        {/* ── Game modal ─────────────────────────────────────────────── */}
+        {/* â”€â”€ Game modal â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
         <TapTheDotGameModal
           visible={gameOpen}
           onClose={() => setGameOpen(false)}
@@ -588,7 +669,7 @@ export default function DashboardScreen() {
           snapshotError={snapshotErr}
         />
 
-        {/* Snapshot capture error — gated behind initial reconciliation
+        {/* Snapshot capture error â€” gated behind initial reconciliation
              so we never flash a stale poll error before the server state
              has been checked and applied. */}
         {reconciliationDone && capture.error && (
@@ -606,12 +687,12 @@ export default function DashboardScreen() {
           </View>
         )}
 
-        {/* â”€â”€ Loading â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
+        {/* Ã¢â€â‚¬Ã¢â€â‚¬ Loading Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬ */}
         {isLoading && !data && (
           <ActivityIndicator color={C.accent} style={{ marginTop: 40 }} />
         )}
 
-        {/* â”€â”€ Streak badge â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
+        {/* Ã¢â€â‚¬Ã¢â€â‚¬ Streak badge Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬ */}
         {data && (data.current_streak_days ?? 0) > 0 && (
           <StreakBadge
             currentStreak={data.current_streak_days}
@@ -619,7 +700,7 @@ export default function DashboardScreen() {
           />
         )}
 
-        {/* ── Net follower change ────────────────────────────── */}
+        {/* â”€â”€ Net follower change â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
         {data?.net_follower_change != null && data.has_diff && (
           <View style={[
             styles.netCard,
@@ -632,13 +713,13 @@ export default function DashboardScreen() {
             </Text>
             {(data.new_followers_count > 0 || data.lost_followers_count > 0) && (
               <Text style={styles.netExplain}>
-                +{data.new_followers_count} new · −{data.lost_followers_count} lost
+                +{data.new_followers_count} new Â· âˆ’{data.lost_followers_count} lost
               </Text>
             )}
           </View>
         )}
 
-        {/* â”€â”€ Stats row (followers / following / friends) â”€â”€â”€â”€â”€â”€ */}
+        {/* Ã¢â€â‚¬Ã¢â€â‚¬ Stats row (followers / following / friends) Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬ */}
         {data && (data.follower_count > 0 || data.following_count > 0) && (
           <StatsRow
             followerCount={data.follower_count  ?? 0}
@@ -647,7 +728,7 @@ export default function DashboardScreen() {
           />
         )}
 
-        {/* â”€â”€ Weekly summary â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
+        {/* Ã¢â€â‚¬Ã¢â€â‚¬ Weekly summary Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬ */}
         {data?.has_weekly_summary && (
           <WeeklySummaryCard
             newFollowers={data.weekly_new_followers   ?? 0}
@@ -656,10 +737,20 @@ export default function DashboardScreen() {
           />
         )}
 
-        {/* â”€â”€ Growth chart â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
+        {/* Ã¢â€â‚¬Ã¢â€â‚¬ Growth chart Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬ */}
         {data && <GrowthChart />}
 
-        {/* â”€â”€ Diff metric cards â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
+        {/* Ã¢â€â‚¬Ã¢â€â‚¬ Diff metric cards Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬ */}
+        {/* Contextual help */}
+        {data && data.has_diff && (
+          <View style={helpStyles.contextualHelpRow}>
+            <Ionicons name="information-circle-outline" size={14} color={C.textMuted} />
+            <Text style={helpStyles.contextualHelpText}>
+              These lists compare your most recent snapshots. This is not a live Instagram feed.
+            </Text>
+          </View>
+        )}
+
         {data && CARDS.map((card) => (
           <DashboardCard
             key={card.key}
@@ -675,8 +766,26 @@ export default function DashboardScreen() {
           />
         ))}
 
-        {/* Soft upgrade CTA for free users */}
-        {data && !isPro && (
+        {/* Beta access badge (replaces upgrade CTA during beta) */}
+        {data && isBetaActive() && (
+          <View style={styles.betaBanner}>
+            <View style={styles.betaIconCircle}>
+              <Ionicons name="star" size={16} color={C.accent} />
+            </View>
+            <View style={{ flex: 1, marginLeft: 10 }}>
+              <Text style={styles.upgradeTitle}>Pro is free during beta</Text>
+              <Text style={styles.upgradeSub}>
+                Full access to all lists and features â€” enjoy!
+              </Text>
+            </View>
+            <View style={styles.betaChip}>
+              <Text style={styles.betaChipText}>BETA</Text>
+            </View>
+          </View>
+        )}
+
+        {/* Soft upgrade CTA for free users (hidden during beta) */}
+        {data && !isPro && !isBetaActive() && (
           <TouchableOpacity
             style={styles.upgradeCta}
             onPress={() => setPaywallOpen(true)}
@@ -693,7 +802,7 @@ export default function DashboardScreen() {
           </TouchableOpacity>
         )}
 
-        {/* â”€â”€ First-snapshot hint â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
+        {/* Ã¢â€â‚¬Ã¢â€â‚¬ First-snapshot hint Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬ */}
         {data && !data.has_diff && (
           <View style={styles.hintBox}>
             <Ionicons name="information-circle-outline" size={16} color={C.textMuted} />
@@ -703,7 +812,7 @@ export default function DashboardScreen() {
           </View>
         )}
 
-        {/* â”€â”€ Empty state â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
+        {/* Ã¢â€â‚¬Ã¢â€â‚¬ Empty state Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬ */}
         {!data && !isLoading && (
           <View style={styles.emptyState}>
             <Ionicons
@@ -729,10 +838,10 @@ export default function DashboardScreen() {
         )}
       </ScrollView>
 
-      {/* Paywall modal – shown when free user taps upgrade CTA */}
+      {/* Paywall modal â€“ shown when free user taps upgrade CTA */}
       <PaywallModal visible={paywallOpen} onClose={() => setPaywallOpen(false)} />
 
-      {/* School attribution modal – shown once for new users */}
+      {/* School attribution modal â€“ shown once for new users */}
       <SchoolPickerModal
         visible={schoolPrompt.shouldShow}
         userId={user?.id ?? ''}
@@ -1045,6 +1154,37 @@ const styles = StyleSheet.create({
     lineHeight: 17,
   },
 
+  betaBanner: {
+    flexDirection:    'row',
+    alignItems:       'center',
+    backgroundColor:  C.surface,
+    borderRadius:     14,
+    borderWidth:      1,
+    borderColor:      C.accentDim,
+    padding:          14,
+    marginBottom:     14,
+  },
+  betaIconCircle: {
+    width:           34,
+    height:          34,
+    borderRadius:    17,
+    backgroundColor: C.accentDim,
+    alignItems:      'center',
+    justifyContent:  'center',
+  },
+  betaChip: {
+    backgroundColor: C.accentDim,
+    borderRadius:    8,
+    paddingVertical:  3,
+    paddingHorizontal: 8,
+  },
+  betaChipText: {
+    color:        C.accent,
+    fontSize:     10,
+    fontWeight:   '700',
+    letterSpacing: 0.8,
+  },
+
   // Live partial "doesn't follow back" counter shown during following phase
   partialNfbRow: {
     flexDirection:    'row',
@@ -1065,3 +1205,21 @@ const styles = StyleSheet.create({
   },
 });
 
+
+
+const helpStyles = StyleSheet.create({
+  contextualHelpRow: {
+    flexDirection:   'row' as const,
+    alignItems:      'flex-start' as const,
+    gap:             6,
+    paddingVertical:  6,
+    paddingHorizontal: 2,
+    marginBottom:    8,
+  },
+  contextualHelpText: {
+    color:      C.textMuted,
+    fontSize:   11,
+    flex:       1,
+    lineHeight: 16,
+  },
+});

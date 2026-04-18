@@ -15,10 +15,13 @@
 // the next Edge Function invocation can resume exactly where this one ended.
 
 import { adminClient }                              from "./supabase_client.ts";
-import { fetchEdgeListChunked, IgEdge, FAILURE_MODES, DeviceProfile } from "./instagram.ts";
+import { fetchEdgeListChunked, IgEdge, FAILURE_MODES, DeviceProfile, precheckSession, classifyFetchFailure, requiresReconnect } from "./instagram.ts";
 import { computeSnapshotDiff }                     from "./diff.ts";
 import { writeDiff, loadPreviousSnapshot }          from "./diff_writer.ts";
 import { sendPushNotification }                    from "./push.ts";
+
+/** User-facing message for reconnect-required transitions (no error/failure language). */
+const RECONNECT_USER_MESSAGE = "Reconnect Instagram to keep tracking active";
 
 // ── Cursor helpers ────────────────────────────────────────────────────
 // The rank_token must stay consistent across invocations for Instagram’s
@@ -352,6 +355,39 @@ export async function runSnapshotChunk(
     pd: number, fs: number, fws: number, done: boolean, msg: string, fwc = false, eta: number | null = null,
   ) => makeResult(job.id, status, p, pd, fs, fws, done, msg, fwc, job.follower_count_api, job.following_count_api, job.is_first_snapshot, eta);
 
+  // ── Auth precheck ────────────────────────────────────────────────────────
+  // Before doing any Instagram API work, verify the session is still alive.
+  // This avoids wasting time paginating with a dead cookie. The precheck
+  // is cheap (single /current_user/ call) and catches expired sessions
+  // before any pagination begins.
+  // Skip precheck during finalize — no IG API calls needed in that phase.
+  if (phase !== "finalize") {
+    const precheckFailure = await precheckSession(cookie, deviceProfile);
+    if (precheckFailure) {
+      const category = classifyFetchFailure(precheckFailure);
+      const mode = FAILURE_MODES[precheckFailure as keyof typeof FAILURE_MODES];
+      const msg = mode?.uiMessage ?? `Auth precheck failed: ${precheckFailure}`;
+      console.error(`[job ${job.id}] Auth precheck failed: code=${precheckFailure} category=${category} account=${job.ig_account_id}`);
+
+      // Persist whatever progress we have before failing
+      await db.from("snapshot_jobs").update({
+        followers_json:   followers,
+        following_json:   following,
+        pages_done:       pagesDone,
+        updated_at:       new Date().toISOString(),
+      }).eq("id", job.id);
+      console.log(`[job ${job.id}] Partial progress saved before auth failure: ${followers.length} followers, ${following.length} following, ${pagesDone} pages`);
+
+      // Mark account as needing reconnect if this is an auth failure
+      if (requiresReconnect(category)) {
+        await markAccountReconnectRequired(db, job.ig_account_id, job.user_id, precheckFailure, msg);
+      }
+
+      await failJob(db, job.id, RECONNECT_USER_MESSAGE, job.started_at, precheckFailure);
+      return mk("failed", phase, pagesDone, followers.length, following.length, true, msg);
+    }
+  }
+
   // ── Phase: followers ─────────────────────────────────────────────────────
   if (phase === "followers") {
     const { cursor: actualFollowersCursor, rankToken: savedRankToken } = parseCursorField(followersCursor);
@@ -371,10 +407,27 @@ export async function runSnapshotChunk(
     followersCursor = encodeCursorField(result.nextCursor, result.rankToken);
 
     if (result.stopReason && result.stopReason !== "PAGE_LIMIT_REACHED") {
-      // Fatal Instagram error — fail the job
+      // Fatal Instagram error — persist partial progress before failing
       const mode = FAILURE_MODES[result.stopReason];
-      await failJob(db, job.id, mode?.uiMessage ?? result.stopReason, job.started_at, result.stopReason);
-      return mk("failed", phase, pagesDone, followers.length, following.length, true, mode?.uiMessage ?? result.stopReason);
+      const failMsg = mode?.uiMessage ?? result.stopReason;
+
+      // Save whatever edges we captured this invocation
+      await db.from("snapshot_jobs").update({
+        followers_json:   followers,
+        followers_cursor: followersCursor,
+        pages_done:       pagesDone,
+        updated_at:       new Date().toISOString(),
+      }).eq("id", job.id);
+      console.log(`[job ${job.id}] Partial progress saved on followers failure: ${followers.length} followers, ${pagesDone} pages`);
+
+      // Mark reconnect if this is an auth failure
+      const category = classifyFetchFailure(result.stopReason);
+      if (requiresReconnect(category)) {
+        await markAccountReconnectRequired(db, job.ig_account_id, job.user_id, result.stopReason, failMsg);
+      }
+
+      await failJob(db, job.id, requiresReconnect(category) ? RECONNECT_USER_MESSAGE : failMsg, job.started_at, result.stopReason);
+      return mk("failed", phase, pagesDone, followers.length, following.length, true, requiresReconnect(category) ? RECONNECT_USER_MESSAGE : failMsg);
     }
 
     const followersPhaseDone = result.isComplete || result.nextCursor === null;
@@ -443,8 +496,24 @@ export async function runSnapshotChunk(
 
       if (result.stopReason && result.stopReason !== "PAGE_LIMIT_REACHED") {
         const mode = FAILURE_MODES[result.stopReason];
-        await failJob(db, job.id, mode?.uiMessage ?? result.stopReason, job.started_at, result.stopReason);
-        return mk("failed", phase, pagesDone, followers.length, following.length, true, mode?.uiMessage ?? result.stopReason);
+        const failMsg = mode?.uiMessage ?? result.stopReason;
+
+        // Save partial following progress before failing
+        await db.from("snapshot_jobs").update({
+          following_json:   following,
+          following_cursor: followingCursor,
+          pages_done:       pagesDone,
+          updated_at:       new Date().toISOString(),
+        }).eq("id", job.id);
+        console.log(`[job ${job.id}] Partial progress saved on following failure: ${following.length} following, ${pagesDone} pages`);
+
+        const category = classifyFetchFailure(result.stopReason);
+        if (requiresReconnect(category)) {
+          await markAccountReconnectRequired(db, job.ig_account_id, job.user_id, result.stopReason, failMsg);
+        }
+
+        await failJob(db, job.id, requiresReconnect(category) ? RECONNECT_USER_MESSAGE : failMsg, job.started_at, result.stopReason);
+        return mk("failed", phase, pagesDone, followers.length, following.length, true, requiresReconnect(category) ? RECONNECT_USER_MESSAGE : failMsg);
       }
 
       const followingPhaseDone = result.isComplete || result.nextCursor === null;
@@ -614,9 +683,34 @@ export async function runSnapshotChunk(
         .select("id")
         .maybeSingle();
 
+      // ── Trigger smart-notify for auto snapshots ────────────────────
+      // For cron-sourced jobs, delegate notification decisions to smart-notify
+      // instead of sending the generic "Snapshot Ready" push.
+      if (markedComplete && job.source === "cron" && diffId) try {
+        const smartNotifyUrl = Deno.env.get("SUPABASE_URL") + "/functions/v1/smart-notify";
+        const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+        await fetch(smartNotifyUrl, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${serviceKey}`,
+          },
+          body: JSON.stringify({
+            diff_id: diffId,
+            ig_account_id: igAccountId,
+            user_id: job.user_id,
+            job_id: job.id,
+          }),
+        });
+        console.log(`[job ${job.id}] smart-notify triggered for auto snapshot.`);
+      } catch (smartErr) {
+        console.warn("[job finalize] smart-notify call error:", (smartErr as Error).message);
+      }
+
       // ── Send "snapshot ready" push notification ─────────────────────
-      // Only send if we were the request that flipped status →0 complete.
-      if (markedComplete) try {
+      // Only send if we were the request that flipped status → complete.
+      // Skip for cron jobs — smart-notify handles those.
+      if (markedComplete && job.source !== "cron") try {
         const { data: profile } = await db
           .from("profiles")
           .select("push_token")
@@ -685,6 +779,82 @@ export async function runSnapshotChunk(
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────
+
+/**
+ * Mark an IG account as needing reconnect after an auth failure.
+ * Sets reconnect_required=true, records the error details, sets
+ * status to token_expired, and sends a one-time push notification.
+ */
+// deno-lint-ignore no-explicit-any
+async function markAccountReconnectRequired(
+  db: any,
+  igAccountId: string,
+  userId: string,
+  errorCode: string,
+  errorMessage: string,
+): Promise<void> {
+  const now = new Date().toISOString();
+  await db.from("ig_accounts").update({
+    reconnect_required:      true,
+    last_auth_error_code:    errorCode,
+    last_auth_error_message: errorMessage,
+    last_auth_error_at:      now,
+    status:                  "token_expired",
+    updated_at:              now,
+  }).eq("id", igAccountId);
+  console.log(`[auth] Account ${igAccountId} marked reconnect_required: code=${errorCode}`);
+  console.log(`[auth] Partial progress preserved. User-facing state: tracking_paused_reconnect_required`);
+
+  // Analytics: reconnect lifecycle event
+  try {
+    await db.from("funnel_events").insert({
+      user_id:    userId,
+      event_name: "reconnect_required_entered",
+      payload:    { ig_account_id: igAccountId, error_code: errorCode },
+    });
+  } catch (_) { /* analytics is non-fatal */ }
+
+  // Send a one-time reconnect notification (respects notify_on_token_expiry pref)
+  try {
+    const { data: notifPrefs } = await db
+      .from("user_settings")
+      .select("notify_on_token_expiry")
+      .eq("user_id", userId)
+      .maybeSingle();
+
+    const shouldNotify = notifPrefs?.notify_on_token_expiry ?? true;
+
+    if (shouldNotify) {
+      const { data: profile } = await db
+        .from("profiles")
+        .select("push_token")
+        .eq("id", userId)
+        .maybeSingle();
+
+      if (profile?.push_token) {
+        await sendPushNotification(
+          profile.push_token,
+          "Reconnect Instagram",
+          "StayReel is paused until you reconnect Instagram. Tap to reconnect.",
+          { screen: "settings", source: "reconnect_required", igAccountId },
+        );
+        console.log(`[auth] Reconnect notification sent to user ${userId}`);
+
+        // Analytics: reconnect notification sent
+        try {
+          await db.from("funnel_events").insert({
+            user_id:    userId,
+            event_name: "reconnect_notification_sent",
+            payload:    { ig_account_id: igAccountId },
+          });
+        } catch (_) { /* analytics is non-fatal */ }
+      }
+    }
+  } catch (notifErr) {
+    // Non-fatal — never let a notification failure disrupt the flow
+    console.warn("[auth] Reconnect notification error:", (notifErr as Error).message);
+  }
+}
 
 // deno-lint-ignore no-explicit-any
 async function failJob(db: any, jobId: string, error: string, startedAt?: string | null, failureCode?: string): Promise<void> {
