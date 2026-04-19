@@ -317,7 +317,7 @@ Deno.serve(async (req: Request) => {
             local_date: local.localDateStr,
             snapshots_today: recentJobs?.length ?? 0,
           },
-        }).then(() => {}).catch(() => {});
+        });
 
         // Call snapshot-start as service-role (it accepts source='cron')
         const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
@@ -363,7 +363,7 @@ Deno.serve(async (req: Request) => {
             local_time: `${local.hours}:${String(local.minutes).padStart(2, '0')}`,
             snapshots_today: (recentJobs?.length ?? 0) + 1,
           },
-        }).then(() => {}).catch(() => {});
+        });
 
         stats.scheduled++;
         console.log(`[auto-snapshot] Started job for ${igAccountId}: jobId=${jobId} (tz=${local.tzUsed}, local=${local.hours}:${String(local.minutes).padStart(2, '0')}, date=${local.localDateStr})`);
@@ -392,7 +392,7 @@ Deno.serve(async (req: Request) => {
             timezone: local.tzUsed,
             local_time: `${local.hours}:${String(local.minutes).padStart(2, '0')}`,
           },
-        }).then(() => {}).catch(() => {});
+        });
 
         stats.failed++;
         stats.errors.push(`${igAccountId}: ${errMsg}`);

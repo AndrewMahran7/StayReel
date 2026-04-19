@@ -2,7 +2,8 @@
   "extends": "expo/tsconfig.base",
   "exclude": [
     "node_modules",
-    "supabase/functions"
+    "supabase/functions",
+    "hooks/errors.ts"
   ],
   "compilerOptions": {
     "strict": true,
@@ -19,8 +20,10 @@
     "skipLibCheck": true,
     "moduleResolution": "bundler",
     "module": "esnext",
+    "ignoreDeprecations": "5.0",
     "types": [
-      "node"
+      "node",
+      "jest"
     ],
     "baseUrl": ".",
     "paths": {
