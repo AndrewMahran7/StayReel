@@ -19,6 +19,7 @@ import { useAuthStore } from '@/store/authStore';
 import { useSubscriptionStore } from '@/store/subscriptionStore';
 import { fetchWithTimeout } from '@/lib/fetchWithTimeout';
 import { TermsAcceptanceModal } from '@/components/TermsAcceptanceModal';
+import { LIMITS_COPY } from '@/lib/limitsCopy';
 import { trackEvent } from '@/lib/analytics';
 import C from '@/lib/colors';
 
@@ -142,8 +143,10 @@ export default function ConnectInstagramScreen() {
         hydrateSub(session.user.id).catch(() => {});
       }
 
-      // Invalidate any cached queries so dashboard fetches fresh data
-      qc.invalidateQueries();
+      // Invalidate dashboard query so it fetches fresh data on mount.
+      // Avoid invalidating ALL queries — that triggers school/referral
+      // hooks simultaneously with navigation, causing a render freeze.
+      qc.invalidateQueries({ queryKey: ['dashboard'] });
 
       router.replace('/(tabs)/dashboard');
     } catch (err: any) {
@@ -176,6 +179,8 @@ export default function ConnectInstagramScreen() {
           ? 'Tap the button below to connect this Instagram account to StayReel.'
           : 'Log in with your Instagram credentials below. Your password goes directly to Instagram — StayReel only receives the session token.\n\nNote: Instagram may occasionally ask you to re-verify your account. This is normal behavior.'}
       </Text>
+
+      <Text style={styles.sizeHint}>{LIMITS_COPY.onboarding}</Text>
 
       {/* WebView */}
       <View style={styles.webviewWrap}>
@@ -220,6 +225,7 @@ const styles = StyleSheet.create({
   header:         { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 20, paddingTop: 12, paddingBottom: 4 },
   headerTitle:    { color: C.textPrimary, fontSize: 20, fontWeight: '700' },
   subtitle:       { color: C.textSecondary, fontSize: 13, lineHeight: 19, paddingHorizontal: 20, marginBottom: 8 },
+  sizeHint:       { color: C.textMuted, fontSize: 11, paddingHorizontal: 20, marginBottom: 8 },
   webviewWrap:    { flex: 1, position: 'relative' },
   webview:        { flex: 1 },
   overlay: {

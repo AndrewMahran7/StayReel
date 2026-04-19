@@ -196,40 +196,46 @@ export default function RootLayout() {
         setSession(session);
 
         if (session?.user) {
-          // ── Step 3: Fetch IG account (critical — gates AuthGuard routing) ──
-          // Per-operation timeout: 5s
-          const igResult = await withTimeout(
-            supabase
-              .from('ig_accounts')
-              .select('id')
-              .eq('user_id', session.user.id)
-              .is('deleted_at', null)
-              .eq('status', 'active')
-              .limit(1)
-              .maybeSingle(),
-            5_000,
-            { data: null, error: null, count: null, status: 408, statusText: 'Timeout' } as any,
-            'ig_accounts query',
-          );
+          // ── Step 3: Fetch IG account + terms acceptance (parallel) ──
+          // Both are critical — ig_accounts gates AuthGuard routing,
+          // terms_accepted gates the TermsAcceptanceModal on connect-instagram.
+          // Running them in parallel keeps total latency the same as before.
+          const [igResult, termsResult] = await Promise.all([
+            withTimeout(
+              supabase
+                .from('ig_accounts')
+                .select('id')
+                .eq('user_id', session.user.id)
+                .is('deleted_at', null)
+                .eq('status', 'active')
+                .limit(1)
+                .maybeSingle(),
+              5_000,
+              { data: null, error: null, count: null, status: 408, statusText: 'Timeout' } as any,
+              'ig_accounts query',
+            ),
+            withTimeout(
+              supabase
+                .from('profiles')
+                .select('terms_accepted_at, terms_version')
+                .eq('id', session.user.id)
+                .maybeSingle(),
+              5_000,
+              { data: null, error: null } as any,
+              'terms hydration',
+            ),
+          ]);
+
           if (igResult.data?.id) setIgAccountId(igResult.data.id);
 
-          // ── Step 4: Non-critical hydration (fire-and-forget) ──
-          // Terms acceptance + subscription state don't need to block
-          // the loading screen. Hydrate them in parallel after render.
-          Promise.resolve(
-            supabase
-              .from('profiles')
-              .select('terms_accepted_at')
-              .eq('id', session.user.id)
-              .maybeSingle(),
-          )
-            .then(({ data: profile }) => {
-              if (profile?.terms_accepted_at) setTermsAccepted(true);
-            })
-            .catch((err: Error) =>
-              console.warn('[Auth] Terms hydrate error:', err.message),
-            );
+          if (termsResult.data?.terms_accepted_at) {
+            console.log('[Auth] Terms already accepted (version:', termsResult.data.terms_version ?? 'unknown', ')');
+            setTermsAccepted(true);
+          } else {
+            console.log('[Auth] Terms not yet accepted');
+          }
 
+          // ── Step 4: Non-critical hydration (fire-and-forget) ──
           hydrateSub(session.user.id).catch((err: Error) =>
             console.warn('[Auth] Subscription hydrate error:', err.message),
           );

@@ -13,7 +13,7 @@ interface AutoSnapshotSetting {
 
 export function useAutoSnapshotSetting(): AutoSnapshotSetting {
   const igAccountId = useAuthStore((s) => s.igAccountId);
-  const [enabled, setEnabled]     = useState(true); // default ON
+  const [enabled, setEnabled]     = useState(false); // default OFF — user must opt in
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
@@ -28,7 +28,7 @@ export function useAutoSnapshotSetting(): AutoSnapshotSetting {
         .maybeSingle();
 
       if (!cancelled) {
-        setEnabled(data?.auto_snapshot_enabled ?? true);
+        setEnabled(data?.auto_snapshot_enabled ?? false);
         setIsLoading(false);
       }
     })();

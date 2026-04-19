@@ -15,6 +15,7 @@ import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/store/authStore';
 import { setReferralAttribute } from '@/lib/revenueCat';
 import { useCallback, useEffect, useRef } from 'react';
+import { ENABLE_POST_CONNECT_ONBOARDING } from '@/lib/featureFlags';
 
 const QUERY_KEY     = 'referral-prompt';
 const STORAGE_KEY   = '@stayreel:referral_code';
@@ -92,7 +93,7 @@ export function useReferralPrompt() {
   // Check DB state: should we show the modal?
   const query = useQuery({
     queryKey: [QUERY_KEY, userId],
-    enabled:  !!userId && !!igAccountId,
+    enabled:  ENABLE_POST_CONNECT_ONBOARDING && !!userId && !!igAccountId,
     staleTime: Infinity,
     queryFn: async (): Promise<boolean> => {
       // Respect the session-level dismiss flag
@@ -125,7 +126,7 @@ export function useReferralPrompt() {
     },
   });
 
-  const shouldShow = !dismissedRef.current && query.data === true;
+  const shouldShow = ENABLE_POST_CONNECT_ONBOARDING && !dismissedRef.current && query.data === true;
 
   // Debug logging — fires on every render; gate behind __DEV__ to avoid
   // spamming release-build logs and causing minor perf overhead.
@@ -141,6 +142,7 @@ export function useReferralPrompt() {
 
   // Auto-apply stashed code from AsyncStorage (pre-signup flow)
   useEffect(() => {
+    if (!ENABLE_POST_CONNECT_ONBOARDING) return;
     if (!userId || !igAccountId || autoApplied.current) return;
     autoApplied.current = true;
 

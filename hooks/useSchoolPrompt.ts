@@ -12,6 +12,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/store/authStore';
 import { useCallback } from 'react';
+import { ENABLE_POST_CONNECT_ONBOARDING } from '@/lib/featureFlags';
 
 const QUERY_KEY = 'school-prompt';
 
@@ -22,7 +23,7 @@ export function useSchoolPrompt() {
 
   const query = useQuery({
     queryKey: [QUERY_KEY, userId],
-    enabled:  !!userId && !!igAccountId,
+    enabled:  ENABLE_POST_CONNECT_ONBOARDING && !!userId && !!igAccountId,
     staleTime: Infinity,          // only fetch once per session
     queryFn: async (): Promise<boolean> => {
       const { data, error } = await supabase
@@ -45,7 +46,7 @@ export function useSchoolPrompt() {
   }, [qc, userId]);
 
   return {
-    shouldShow: query.data === true,
+    shouldShow: ENABLE_POST_CONNECT_ONBOARDING && query.data === true,
     dismiss,
   };
 }

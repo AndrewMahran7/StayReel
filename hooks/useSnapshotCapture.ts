@@ -152,6 +152,8 @@ interface ChunkResponse {
   partialNotFollowingBackPreview?: Array<{ig_id: string; username: string}>;
   /** True once followers phase is complete and following scan is active. */
   partialResultsReady?: boolean;
+  /** Whether the full follower/following lists were captured (false = partial due to max_pages). */
+  isListComplete?: boolean;
 }
 
 /** Fetch with an AbortController timeout so a hung edge function
@@ -505,8 +507,9 @@ export function computeEtaLabel(etaMs: number | null | undefined): string | null
 }
 function finalise(chunk: ChunkResponse): CaptureResult {
   return {
-    jobId:   chunk.jobId,
-    status:  chunk.status,
+    jobId:            chunk.jobId,
+    status:           chunk.status,
+    is_list_complete: chunk.isListComplete,
   };
 }
 

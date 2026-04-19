@@ -202,6 +202,8 @@ export interface ChunkResult {
   partialNotFollowingBackPreview: Array<{ig_id: string; username: string}>;
   /** True once the followers phase is fully complete and the following scan has begun. */
   partialResultsReady: boolean;
+  /** Whether the full follower/following lists were captured (false = partial due to max_pages). */
+  isListComplete?: boolean;
 }
 
 // ── Job locking ────────────────────────────────────────────────────────────
@@ -764,8 +766,13 @@ export async function runSnapshotChunk(
         console.warn("[job finalize] push notification error:", (notifErr as Error).message);
       }
 
-      console.log(`[job ${job.id}] finalized: snapshot ${snapshot.id}, ${followerCount} followers, ${followingCount} following`);
-      return mk("complete", "finalize", pagesDone, followers.length, following.length, true, "Snapshot complete.", followingFromCache);
+      console.log(`[job ${job.id}] finalized: snapshot ${snapshot.id}, ${followerCount} followers, ${followingCount} following, list_complete=${isListComplete}`);
+      if (!isListComplete) {
+        console.log(`[job ${job.id}] partial capture: followers_cursor=${job.followers_cursor !== null} following_cursor=${job.following_cursor !== null}`);
+      }
+      const finalResult = mk("complete", "finalize", pagesDone, followers.length, following.length, true, "Snapshot complete.", followingFromCache);
+      finalResult.isListComplete = isListComplete;
+      return finalResult;
 
     } catch (err) {
       const msg = (err as Error).message ?? "Finalization error";
@@ -907,6 +914,7 @@ function makeResult(
   isFirstSnapshot = false,
   etaMs: number | null = null,
   resumed = false,
+  isListComplete?: boolean,
 ): ChunkResult {
-  return { jobId, status, phase, pagesDone, followersSeen, followingSeen, followerCountApi, followingCountApi, done, message, followingCached, isFirstSnapshot, etaMs, resumed, partialNotFollowingBackCount: 0, partialNotFollowingBackPreview: [], partialResultsReady: false };
+  return { jobId, status, phase, pagesDone, followersSeen, followingSeen, followerCountApi, followingCountApi, done, message, followingCached, isFirstSnapshot, etaMs, resumed, partialNotFollowingBackCount: 0, partialNotFollowingBackPreview: [], partialResultsReady: false, isListComplete };
 }

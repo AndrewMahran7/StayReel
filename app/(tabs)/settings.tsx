@@ -34,6 +34,9 @@ import { schoolLabel } from '@/lib/schools';
 import { isBetaActive } from '@/lib/betaAccess';
 import { useAutoSnapshotSetting } from '@/hooks/useAutoSnapshotSetting';
 import { HowItWorksModal } from '@/components/HowItWorksModal';
+import { LIMITS_COPY } from '@/lib/limitsCopy';
+import { ENABLE_POST_CONNECT_ONBOARDING } from '@/lib/featureFlags';
+import { trackEvent } from '@/lib/analytics';
 import C from '@/lib/colors';
 
 export default function SettingsScreen() {
@@ -243,15 +246,17 @@ export default function SettingsScreen() {
           />
         )}
 
-        <ActionRow
-          icon="school-outline"
-          iconColor={C.teal}
-          title="School"
-          subtitle={schoolLabel(schoolId)}
-          onPress={() => setShowSchoolPicker(true)}
-        />
+        {ENABLE_POST_CONNECT_ONBOARDING && (
+          <ActionRow
+            icon="school-outline"
+            iconColor={C.teal}
+            title="School"
+            subtitle={schoolLabel(schoolId)}
+            onPress={() => setShowSchoolPicker(true)}
+          />
+        )}
 
-        {showReferralRow && (
+        {ENABLE_POST_CONNECT_ONBOARDING && showReferralRow && (
           referredBy ? (
             <SettingRow
               icon="gift-outline"
@@ -385,13 +390,18 @@ export default function SettingsScreen() {
         <ToggleRow
           icon="refresh-circle-outline"
           iconColor={C.teal}
-          title="Automatic daily snapshots"
-          subtitle="One snapshot per day around midday (counts toward daily limit)"
+          title="Automatic snapshots"
+          subtitle="Let StayReel check for changes in the background. This may increase activity on your Instagram account."
           value={autoSnapshot.enabled}
           onToggle={() => {
-            autoSnapshot.toggle().catch(() =>
-              Alert.alert('Error', 'Could not save auto-snapshot preference.'),
-            );
+            const willEnable = !autoSnapshot.enabled;
+            autoSnapshot.toggle()
+              .then(() => {
+                trackEvent(willEnable ? 'auto_snapshots_enabled_on' : 'auto_snapshots_enabled_off');
+              })
+              .catch(() =>
+                Alert.alert('Error', 'Could not save auto-snapshot preference.'),
+              );
           }}
         />
 
@@ -501,6 +511,17 @@ export default function SettingsScreen() {
           subtitle="Common errors and how to fix them."
           onPress={() => router.push('/troubleshooting')}
         />
+
+        {/* Account size FAQ */}
+        <View style={styles.faqBlock}>
+          <View style={styles.faqHeader}>
+            <Ionicons name="analytics-outline" size={16} color={C.textMuted} />
+            <Text style={styles.faqTitle}>{LIMITS_COPY.faq.title}</Text>
+          </View>
+          {LIMITS_COPY.faq.bullets.map((bullet, i) => (
+            <Text key={i} style={styles.faqBullet}>•  {bullet}</Text>
+          ))}
+        </View>
 
         <Text style={styles.version}>StayReel v1.0.0</Text>
       </ScrollView>
@@ -656,6 +677,21 @@ const styles = StyleSheet.create({
   rowTitle: { color: C.textPrimary, fontSize: 15, fontWeight: '500' },
   rowSub:   { color: C.textMuted, fontSize: 12, marginTop: 2 },
   version:  { color: C.textMuted, fontSize: 12, textAlign: 'center', marginTop: 24 },
+  faqBlock: {
+    backgroundColor: C.surface,
+    borderRadius:    10,
+    padding:         14,
+    marginHorizontal: 16,
+    marginTop:       12,
+  },
+  faqHeader: {
+    flexDirection: 'row',
+    alignItems:    'center',
+    gap:           6,
+    marginBottom:  8,
+  },
+  faqTitle:  { color: C.textSecondary, fontSize: 13, fontWeight: '600' },
+  faqBullet: { color: C.textMuted, fontSize: 12, lineHeight: 18, marginLeft: 4 },
 });
 
 // shared sub-component styles (mirrored from outer but scoped)

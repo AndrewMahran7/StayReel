@@ -11,6 +11,7 @@ Track who followed you, who unfollowed you, and who doesn't follow back — no a
 - **Magic-link sign-in** — no password required, deep-link callback handled automatically
 - **Instagram connection** — connect via your `sessionid` cookie, stored AES-256 encrypted in Supabase Vault
 - **Resumable snapshots** — chunked job system handles 25k+ follower accounts without server timeouts
+- **Automatic snapshots** — opt-in daily background snapshots with smart notifications (only fires on meaningful changes)
 - **5 diff categories** — New followers, Unfollowed you, Not following you back, You don't follow back, You unfollowed
 - **Growth chart** — 7-day and 30-day follower count history
 - **Streak tracking** — current and longest snapshot streak
@@ -19,9 +20,22 @@ Track who followed you, who unfollowed you, and who doesn't follow back — no a
 - **Unfollow button** — unfollow directly from the Ghost list (Pro)
 - **Tap the Dot mini-game** — playable during snapshot loading
 - **Snapshot error guidance** — plain-English error cards for session expiry, rate limits, and challenges
+- **Reconnect tracking state** — when a session expires, the app shows a calm "tracking paused" state instead of scary errors
+- **Partial results UX** — large accounts (>~5,000 followers) get partial capture with clear messaging
 - **Troubleshooting screen** — expandable accordion explaining every common error and how to fix it
 - **Our Promise screen** — documents what the app will and won't ever do
 - **Freemium / Pro** — list access gated behind RevenueCat subscription (monthly, annual, or free trial); promo codes supported; referral attribution
+
+---
+
+## Account Size Expectations
+
+StayReel works best for accounts under ~5,000 followers. Larger accounts will still receive results, but scans may produce partial data due to Instagram API pagination limits. When a scan is partial:
+
+- The dashboard shows an informational notice (not an error)
+- Diff results are computed from whatever was captured
+- The `is_list_complete` flag on `follower_snapshots` indicates whether the capture was full
+- The `snapshot_partial_complete` analytics event fires for monitoring
 
 ---
 
@@ -63,13 +77,44 @@ Track who followed you, who unfollowed you, and who doesn't follow back — no a
 Manual captures use a **resumable chunked job** to avoid the 150-second Edge Function limit:
 
 1. `snapshot-start` — creates a `snapshot_jobs` row, runs the first ~45 pages (~900 followers)
-2. App polls `snapshot-continue` every ~1 second — each call runs the next chunk within a 75-second budget
+2. App polls `snapshot-continue` every ~2 seconds — each call runs the next chunk within a 75-second budget
 3. Three phases: `followers` → `following` → `finalize`
 4. `finalize` writes `follower_snapshots`, `follower_edges`, diffs, and updates the streak
 5. Job cursor is persisted after every chunk — a crash or network blip is safely resumed
 6. Stale/zombie jobs are cleaned up by `process-stale-jobs` (scheduled Edge Function)
+7. `PAGE_LIMIT_REACHED` per-invocation is **not** a failure — the job continues on next poll
 
 **Cooldown:** 1 snapshot per hour per account, enforced server-side.
+
+**Max pages:** 420 pages per direction (followers/following). When the cap is reached, the job finalizes with `is_list_complete = false` and surfaces partial results.
+
+### Auto-Snapshot Scheduler
+
+- Users must **opt in** via Settings toggle (default: OFF, migration 029)
+- `auto-snapshot-scheduler` cron runs daily, filters accounts where `auto_snapshot_enabled = true`
+- Uses the user's stored timezone (falls back to UTC if missing) for local-date enforcement
+- One automatic snapshot per calendar day per account
+- `smart-notify` fires push notifications only when meaningful changes are detected
+- smart-notify checks `auto_snapshot_enabled` as defense-in-depth before notifying
+- Notification cooldown: minimum 4 hours between push notifications per user
+
+### Reconnect/Product State Model
+
+When an Instagram session expires or is invalidated:
+
+1. The edge function detects the auth failure (SESSION_EXPIRED, CHALLENGE_REQUIRED, etc.)
+2. `ig_accounts.reconnect_required` is set to `true`
+3. A one-time push notification informs the user
+4. The dashboard shows a calm "tracking paused" state — **not** an error card
+5. Auto-snapshots are gated by `reconnect_required` and do not attempt to run
+6. The user reconnects Instagram via Settings → the flag is cleared and tracking resumes
+
+### Session Expiry Handling
+
+- Client-side: `getFreshAccessToken()` proactively refreshes Supabase JWT when within 60s of expiry
+- Edge functions: gateway-level 401s trigger one automatic retry with a fresh token
+- If refresh fails, the user is signed out gracefully (AuthGuard redirects to sign-in)
+- Instagram session expiry is a separate flow — handled by the reconnect state above
 
 ### Edge Functions
 
@@ -79,6 +124,8 @@ Manual captures use a **resumable chunked job** to avoid the 150-second Edge Fun
 | `snapshot-start` | Creates job, runs first follower chunk |
 | `snapshot-continue` | Runs next chunk for an in-progress job |
 | `process-stale-jobs` | Scheduled cleanup — fails zombie jobs older than timeout thresholds |
+| `auto-snapshot-scheduler` | Cron — starts daily auto-snapshots for opted-in accounts |
+| `smart-notify` | Evaluates diff significance and sends push for meaningful changes |
 | `diffs-latest` | Returns dashboard metrics + `next_snapshot_allowed_at` |
 | `list-users` | Paginated follower lists (5 types) |
 | `snapshot-history` | Historical counts for growth chart |
@@ -97,17 +144,18 @@ Manual captures use a **resumable chunked job** to avoid the 150-second Edge Fun
 | Table | Purpose |
 |---|---|
 | `profiles` | One row per auth user; holds subscription status, promo_until, school, referral |
-| `ig_accounts` | Connected Instagram accounts; holds Vault secret ID and streak |
-| `follower_snapshots` | Per-capture counts; raw JSON kept 30 days then nulled |
+| `ig_accounts` | Connected Instagram accounts; holds Vault secret ID, streak, `auto_snapshot_enabled`, `reconnect_required`, timezone |
+| `follower_snapshots` | Per-capture counts; `is_list_complete` flag; raw JSON kept 30 days then nulled |
 | `follower_edges` | Normalised per-follower rows, indexed for set-diff queries |
-| `diffs` | Pre-computed diff between consecutive snapshots |
-| `snapshot_jobs` | Resumable job state (cursor, phase, accumulated JSON, lock) |
+| `diffs` | Pre-computed diff between consecutive snapshots; `notification_sent` flag |
+| `snapshot_jobs` | Resumable job state (cursor, phase, accumulated JSON, lock, heartbeat) |
 | `snapshot_quota` | Per-user daily quota counter |
 | `audit_events` | Immutable event log |
 | `user_settings` | Per-user notification preferences |
+| `funnel_events` | Analytics event log |
 | `promo_codes` | Promo code definitions (quota, expiry, active flag) |
 
-Migrations 001–025 applied to production. Row-Level Security is enabled on every table. Edge Functions use the service-role `adminClient` internally.
+Migrations 001–029 applied to production. Row-Level Security is enabled on every table. Edge Functions use the service-role `adminClient` internally.
 
 ---
 
@@ -124,7 +172,7 @@ app/
     sign-in.tsx
     connect-instagram.tsx
   (tabs)/
-    _layout.tsx            Tab bar + referral/school prompt orchestration
+    _layout.tsx            Tab bar layout
     dashboard.tsx
     lists.tsx
     settings.tsx
@@ -149,6 +197,7 @@ components/
   WeeklySummaryCard.tsx    7-day new/lost follower summary
 
 hooks/
+  useAutoSnapshotSetting.ts    Read/toggle auto-snapshot opt-in state
   useDashboard.ts              React Query: fetch diffs-latest metrics
   useListData.ts               React Query: infinite-paginated list
   useSnapshotCapture.ts        Manages start → poll → done job flow; exposes live progress
@@ -167,7 +216,9 @@ hooks/
 lib/
   analytics.ts             Lightweight funnel event logger (Supabase)
   colors.ts                Design token palette
+  featureFlags.ts          Centralized feature flags (ENABLE_POST_CONNECT_ONBOARDING)
   fetchWithTimeout.ts      fetch() wrapper with configurable timeout + abort
+  limitsCopy.ts            User-facing copy for account-size expectations
   notifications.ts         Expo push token registration helpers
   offlineStorage.ts        AsyncStorage helpers for offline-safe data
   queryClient.ts           TanStack Query client config
@@ -181,7 +232,7 @@ store/
   subscriptionStore.ts     Zustand: isPro, effectivePlan(), promo, RC listener, hydrate
 
 supabase/
-  migrations/              001–025, all applied to production
+  migrations/              001–029, all applied to production
   functions/
     _shared/               auth, cors, errors, instagram, rate_limit, snapshotJob,
                            vault, notify, diff, diff_writer, push
@@ -189,6 +240,8 @@ supabase/
     snapshot-start/
     snapshot-continue/
     process-stale-jobs/
+    auto-snapshot-scheduler/
+    smart-notify/
     diffs-latest/
     list-users/
     snapshot-history/
@@ -237,7 +290,7 @@ eas submit
 ### OTA Update (JS-only changes)
 
 ```bash
-eas update --channel production --message "your message"
+eas update --branch production --message "your message"
 ```
 
 ---
@@ -247,10 +300,20 @@ eas update --channel production --message "your message"
 ```bash
 npm i -g supabase
 supabase link --project-ref <your-project-ref>
-supabase db push                              # apply migrations 001–025
+supabase db push                              # apply migrations 001–029
 supabase functions deploy --no-verify-jwt    # deploy all Edge Functions
 supabase secrets set SUPABASE_SERVICE_ROLE_KEY=<key>
 ```
+
+### Cron / Scheduler Setup
+
+The following scheduled edge functions must be configured via the Supabase Dashboard (Database → Extensions → pg_cron) or via `supabase/config.toml`:
+
+| Schedule | Function | Purpose |
+|---|---|---|
+| Every 6 hours | `auto-snapshot-scheduler` | Starts daily auto-snapshots for opted-in accounts |
+| Every 10 minutes | `process-stale-jobs` | Cleans up zombie/stale snapshot jobs |
+| Every Monday 9:00 UTC | `weekly-summary-notify` | Sends weekly follower summary push |
 
 ---
 
@@ -268,6 +331,75 @@ supabase secrets set SUPABASE_SERVICE_ROLE_KEY=<key>
 
 ---
 
+## Operational Behavior
+
+### Auto-Snapshot Opt-In
+
+- Default: **OFF** (migration 029 resets all existing accounts to false)
+- User enables via Settings → "Automatic snapshots" toggle
+- When toggling on, the subtitle warns: "This may increase activity on your Instagram account"
+- Analytics events: `auto_snapshots_enabled_on` / `auto_snapshots_enabled_off`
+- Scheduler skips accounts where `auto_snapshot_enabled = false`
+- `smart-notify` double-checks the flag before sending any notification
+
+### Notification Cooldown
+
+- Minimum 4 hours between push notifications per user (checked via `profiles.last_notification_sent_at`)
+- If a notification was sent within 4h, smart-notify returns `skipped: cooldown_active`
+- Idempotency: `diffs.notification_sent` flag prevents duplicate notifications for the same diff
+
+### Max Pages & Partial Results
+
+- `MAX_PAGES = 420` per direction (followers/following) — tuned to support accounts up to ~8,400 followers
+- `MAX_PAGES_PER_INVOCATION = 45` (20 for first snapshot) — stays within edge function time budget
+- When the page cap is hit, `PAGE_LIMIT_REACHED` is emitted — this is **not** a failure
+- The job continues normally; at finalize, `is_list_complete` is computed from remaining cursors
+- If cursors remain, `is_list_complete = false` and the dashboard shows an amber partial-results notice
+- Analytics: `snapshot_partial_complete` event fires for partial captures
+- Server logs: `[job X] partial capture: followers_cursor=... following_cursor=...`
+
+### Terms & Conditions Persistence
+
+- Terms acceptance check runs **in parallel** with the IG account query at boot (Promise.all)
+- This eliminates a race condition where the terms modal could briefly flash after acceptance
+
+### Post-Connect Onboarding
+
+- School picker and referral code modals are **disabled** via `ENABLE_POST_CONNECT_ONBOARDING = false`
+- The underlying hooks, DB columns, and Settings entries remain intact
+- Re-enable by flipping the flag in `lib/featureFlags.ts`
+
+---
+
+## Troubleshooting
+
+### Reconnect Required
+
+If a user's Instagram session expires, the app shows "Tracking paused" and prompts them to reconnect. Auto-snapshots stop running until the session is restored.
+
+### Partial / Incomplete Results
+
+Accounts with >~5,000 followers may receive partial scan results. The dashboard shows an informational amber notice. This is expected behavior, not an error.
+
+### Auto Snapshots Not Running
+
+Check:
+1. User has opted in (Settings → "Automatic snapshots" toggle is ON)
+2. `ig_accounts.auto_snapshot_enabled = true` in DB
+3. Account status is `active` and `reconnect_required = false`
+4. `auto_snapshot_fail_count` hasn't exceeded threshold
+5. Cron job is configured and running (check pg_cron logs)
+
+### Timezone Missing / UTC Fallback
+
+If `ig_accounts.timezone` is null, the scheduler uses UTC for daily-limit enforcement. The app records the user's timezone on first app open and on each foreground event.
+
+### Terms Prompt Flashing
+
+Fixed in v1.5.4 — terms hydration now runs in parallel with IG account check, eliminating the race condition.
+
+---
+
 ## Key Design Decisions
 
 - **No passwords stored** — only the Instagram `sessionid` cookie, AES-256 encrypted via Supabase Vault.
@@ -279,14 +411,15 @@ supabase secrets set SUPABASE_SERVICE_ROLE_KEY=<key>
 - **Promo codes** — server-managed via `redeem-promo`; grants `promo_until` timestamp independent of RC.
 - **Mini-game engagement** — the Tap the Dot game is shown during snapshot loading.
 - **OTA updates** — JS-only fixes ship via `eas update` to the `production` channel without a full App Store review cycle.
+- **Auto-snapshot opt-in** — users must explicitly enable automatic snapshots; this protects trust and reduces unwanted IG activity.
+- **Feature flags** — onboarding flows can be toggled without removing code (see `lib/featureFlags.ts`).
 
 ---
 
 ## Known Limitations
 
 - Instagram's private API may throttle or break at any time; `big_list` mode returns ~19 users/page on many accounts.
-- No UI indicator when a snapshot is partial (`is_list_complete = false`) — reciprocity numbers may undercount.
-- No automated tests or CI/CD pipeline.
+- No automated CI/CD pipeline (tests run locally).
 - `admin-reset-quota` is still deployed to production — should be removed or key-guarded before wide release.
 
 ---

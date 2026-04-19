@@ -278,7 +278,7 @@ export function assignDeviceProfile(): DeviceProfile {
 /** Hard page cap per direction per run.
  *  big_list accounts return ~20 users/page on the followers endpoint,
  *  so 800 followers needs ~40 pages. 120 handles up to ~2 400 followers. */
-const MAX_PAGES = 120;
+const MAX_PAGES = 420;
 const PAGE_SIZE = 200;
 
 const BACKOFF_BASE_MS = 2_000;

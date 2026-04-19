@@ -92,7 +92,22 @@ Deno.serve(async (req: Request) => {
       return jsonResponse({ action: "already_notified", diff_id: diffId });
     }
 
-    // ── 2. Check user notification preferences ──────────────────
+    // ── 2. Check auto-snapshot opt-in (defense-in-depth) ────────
+    // Notifications from auto snapshots should only fire if the user
+    // has explicitly opted in to automatic snapshots.
+    const { data: igAccount } = await db
+      .from("ig_accounts")
+      .select("auto_snapshot_enabled")
+      .eq("id", igAccountId)
+      .maybeSingle();
+
+    if (igAccount && igAccount.auto_snapshot_enabled === false) {
+      await markSkipped(db, diffId, "auto_snapshots_disabled");
+      await logEvent(db, userId, "auto_snapshot_completed", { ig_account_id: igAccountId, job_id: jobId, notification: "skipped_auto_disabled" });
+      return jsonResponse({ action: "skipped", reason: "auto_snapshots_disabled" });
+    }
+
+    // ── 3. Check user notification preferences ──────────────────
     const { data: settings } = await db
       .from("user_settings")
       .select("notify_on_meaningful_change")
@@ -105,7 +120,7 @@ Deno.serve(async (req: Request) => {
       return jsonResponse({ action: "skipped", reason: "user_opted_out" });
     }
 
-    // ── 3. Get push token + cooldown check ───────────────────
+    // ── 4. Get push token + cooldown check ───────────────────
     const { data: profile } = await db
       .from("profiles")
       .select("push_token, last_notification_sent_at")
@@ -130,13 +145,13 @@ Deno.serve(async (req: Request) => {
       }
     }
 
-    // ── 4. Compute change metrics ───────────────────────────────
+    // ── 5. Compute change metrics ───────────────────────────────
     const netChange    = diff.net_follower_change ?? 0;
     const absNetChange = Math.abs(netChange);
     const lostCount    = Array.isArray(diff.lost_followers) ? diff.lost_followers.length : 0;
     const gainedCount  = Array.isArray(diff.new_followers)  ? diff.new_followers.length  : 0;
 
-    // ── 5. Detect new content ───────────────────────────────────
+    // ── 6. Detect new content ───────────────────────────────────
     // Compare post_count between current and previous snapshot
     let hasNewContent = false;
     if (diff.from_snapshot_id && diff.to_snapshot_id) {
@@ -154,7 +169,7 @@ Deno.serve(async (req: Request) => {
       }
     }
 
-    // ── 6. Apply threshold logic ────────────────────────────────
+    // ── 7. Apply threshold logic ────────────────────────────────
     let shouldNotify = false;
     let reason = "";
 
@@ -186,7 +201,7 @@ Deno.serve(async (req: Request) => {
       return jsonResponse({ action: "skipped", reason: "below_threshold", net_change: netChange, lost_count: lostCount });
     }
 
-    // ── 7. Build notification copy ──────────────────────────────
+    // ── 8. Build notification copy ──────────────────────────────
     const { title, notifBody } = buildNotificationCopy({
       hasNewContent,
       netChange,
@@ -194,7 +209,7 @@ Deno.serve(async (req: Request) => {
       gainedCount,
     });
 
-    // ── 8. Send push notification ───────────────────────────────
+    // ── 9. Send push notification ───────────────────────────────
     const ticket = await sendPushNotification(
       profile.push_token,
       title,
@@ -202,7 +217,7 @@ Deno.serve(async (req: Request) => {
       { screen: "dashboard", source: "auto_snapshot", jobId, igAccountId },
     );
 
-    // ── 9. Update audit trail ───────────────────────────────────
+    // ── 10. Update audit trail ──────────────────────────────────
     await db.from("diffs").update({
       notification_sent:           true,
       notification_reason:         reason,

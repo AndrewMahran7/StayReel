@@ -20,6 +20,7 @@ import { supabase } from '@/lib/supabase';
 export type FunnelEvent =
   | 'snapshot_started'
   | 'snapshot_completed'
+  | 'snapshot_partial_complete'
   | 'snapshot_failed'
   | 'list_opened'
   | 'locked_rows_seen'
@@ -36,6 +37,9 @@ export type FunnelEvent =
   | 'auto_snapshot_started'
   | 'auto_snapshot_completed'
   | 'auto_snapshot_skipped'
+  | 'auto_snapshots_enabled_on'
+  | 'auto_snapshots_enabled_off'
+  | 'auto_snapshot_skipped_opted_out'
   | 'meaningful_change_detected'
   | 'notification_sent'
   | 'reconnect_required_entered'
