@@ -13,21 +13,23 @@ import { queryClient } from '@/lib/queryClient';
 // ── Types ──────────────────────────────────────────────────────────────────
 
 export interface ServerJobState {
-  jobId:        string;
-  status:       'running' | 'queued' | 'complete' | 'failed';
-  phase:        string;
-  pagesDone:    number;
-  error:        string | null;
-  failureCode:  string | null;
-  completedAt:  string | null;
-  startedAt:    string | null;
+  jobId:           string;
+  status:          'running' | 'queued' | 'complete' | 'failed';
+  phase:           string;
+  progressPercent: number;
+  progressStage:   'started' | 'followers' | 'following' | 'finalize' | 'complete' | 'failed' | 'reconnect_required';
+  followingCached: boolean;
+  error:           string | null;
+  failureCode:     string | null;
+  completedAt:     string | null;
+  startedAt:       string | null;
 }
 
 export type ReconciliationAction =
   | { type: 'none' }
   | { type: 'completed_while_away'; jobId: string }
-  | { type: 'still_running'; jobId: string }
-  | { type: 'still_queued'; jobId: string }
+  | { type: 'still_running'; jobId: string; progressPercent: number; progressStage: ServerJobState['progressStage']; followingCached: boolean }
+  | { type: 'still_queued';  jobId: string; progressPercent: number; progressStage: ServerJobState['progressStage'] }
   | { type: 'failed'; jobId: string; failureCode: string; error: string }
   | { type: 'reconnect_required'; jobId: string }
   | { type: 'stale_cleared' };
@@ -42,7 +44,7 @@ export async function fetchLatestJobState(igAccountId: string): Promise<ServerJo
   try {
     const { data, error } = await supabase
       .from('snapshot_jobs')
-      .select('id, status, phase, pages_done, error, failure_code, completed_at, started_at')
+      .select('id, status, phase, progress_percent, progress_stage, following_cached, error, failure_code, completed_at, started_at')
       .eq('ig_account_id', igAccountId)
       .order('started_at', { ascending: false })
       .limit(1)
@@ -54,14 +56,16 @@ export async function fetchLatestJobState(igAccountId: string): Promise<ServerJo
     }
 
     return {
-      jobId:       data.id,
-      status:      data.status,
-      phase:       data.phase,
-      pagesDone:   data.pages_done,
-      error:       data.error,
-      failureCode: data.failure_code,
-      completedAt: data.completed_at,
-      startedAt:   data.started_at,
+      jobId:           data.id,
+      status:          data.status,
+      phase:           data.phase,
+      progressPercent: data.progress_percent ?? 0,
+      progressStage:   data.progress_stage   ?? 'started',
+      followingCached: data.following_cached ?? false,
+      error:           data.error,
+      failureCode:     data.failure_code,
+      completedAt:     data.completed_at,
+      startedAt:       data.started_at,
     };
   } catch (err) {
     console.warn('[reconciliation] Failed to fetch latest job state:', (err as Error).message);
@@ -77,21 +81,23 @@ export async function fetchJobById(jobId: string): Promise<ServerJobState | null
   try {
     const { data, error } = await supabase
       .from('snapshot_jobs')
-      .select('id, status, phase, pages_done, error, failure_code, completed_at, started_at')
+      .select('id, status, phase, progress_percent, progress_stage, following_cached, error, failure_code, completed_at, started_at')
       .eq('id', jobId)
       .maybeSingle();
 
     if (error || !data) return null;
 
     return {
-      jobId:       data.id,
-      status:      data.status,
-      phase:       data.phase,
-      pagesDone:   data.pages_done,
-      error:       data.error,
-      failureCode: data.failure_code,
-      completedAt: data.completed_at,
-      startedAt:   data.started_at,
+      jobId:           data.id,
+      status:          data.status,
+      phase:           data.phase,
+      progressPercent: data.progress_percent ?? 0,
+      progressStage:   data.progress_stage   ?? 'started',
+      followingCached: data.following_cached ?? false,
+      error:           data.error,
+      failureCode:     data.failure_code,
+      completedAt:     data.completed_at,
+      startedAt:       data.started_at,
     };
   } catch (err) {
     console.warn('[reconciliation] Failed to fetch job by ID:', (err as Error).message);
@@ -226,12 +232,23 @@ export async function reconcile(
 
     case 'running':
       console.log('[reconciliation] Job', serverJob.jobId,
-        'is still running (phase:', serverJob.phase, ', pages:', serverJob.pagesDone, ')');
-      return { type: 'still_running', jobId: serverJob.jobId };
+        'is still running (stage:', serverJob.progressStage, ', percent:', serverJob.progressPercent, ')');
+      return {
+        type:            'still_running',
+        jobId:           serverJob.jobId,
+        progressPercent: serverJob.progressPercent,
+        progressStage:   serverJob.progressStage,
+        followingCached: serverJob.followingCached,
+      };
 
     case 'queued':
       console.log('[reconciliation] Job', serverJob.jobId, 'is queued.');
-      return { type: 'still_queued', jobId: serverJob.jobId };
+      return {
+        type:            'still_queued',
+        jobId:           serverJob.jobId,
+        progressPercent: serverJob.progressPercent,
+        progressStage:   serverJob.progressStage,
+      };
 
     case 'failed': {
       const errorMsg = serverJob.error ?? 'Snapshot failed.';

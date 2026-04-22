@@ -11,12 +11,11 @@
 // • The session cookie is consumed in-memory only; it is stored encrypted
 //   in Supabase Vault by the calling Edge Function — never in plaintext.
 //
-// SELF-IMPOSED LIMITS (conservative by design)
-// ─────────────────────────────────────────────
-// • MAX_PAGES = 20 per direction (≤ 4 000 edges per run at 200/page)
-// • Inter-page delay: 600–1 200 ms randomised
-// • Retry backoff: 2 s → 4 s → 8 s → 16 s (max 4 retries, jittered)
-// • Immediate halt on any challenge, checkpoint, or suspicious redirect
+// ACTIVE PIPELINE LIMITS
+// ──────────────────────
+// • One primary pacing mechanism: a short inter-page delay
+// • One retry strategy: bounded retry with short backoff
+// • Immediate halt on auth / challenge / suspicious responses
 // • Partial results returned when stopped early — never an exception
 
 // (No AppError/Errors imports needed — this module uses its own result types)
@@ -275,28 +274,18 @@ export function assignDeviceProfile(): DeviceProfile {
   return { ua, deviceId, androidId };
 }
 
-/** Hard page cap per direction per run.
- *  big_list accounts return ~20 users/page on the followers endpoint,
- *  so 800 followers needs ~40 pages. 120 handles up to ~2 400 followers. */
-const MAX_PAGES = 420;
+const MAX_PAGES = 420; // legacy single-call helper only
 const PAGE_SIZE = 200;
 
-const BACKOFF_BASE_MS = 2_000;
-const BACKOFF_MAX_MS  = 32_000;
+const BACKOFF_BASE_MS = 750;
+const BACKOFF_MAX_MS  = 3_000;
 const BACKOFF_JITTER  = 1_000;
-const MAX_RETRIES     = 2;
+const MAX_RETRIES     = 1;
 
-/** Polite inter-page pause: 4 000–6 000 ms randomised.
- *  Reduced from 10–15 s to double throughput per invocation.
- *  ultraSafe mode still uses 12–18 s for first-ever snapshots. */
-const PAGE_DELAY_MIN  = 4_000;
-const PAGE_DELAY_MAX  = 6_000;
-
-/** Start-delay for the second parallel direction. Separates the first page
- *  requests so Instagram doesn't see a simultaneous burst from the same session.
- *  Both fetches still run concurrently, keeping total time well under 150 s. */
-const DIRECTION_START_STAGGER_MIN = 8_000;
-const DIRECTION_START_STAGGER_MAX = 12_000;
+/** Primary pacing mechanism for the active resumable pipeline.
+ *  Short enough to keep sessions brief, but still avoids immediate back-to-back bursts. */
+const PAGE_DELAY_MIN  = 300;
+const PAGE_DELAY_MAX  = 700;
 
 // ─────────────────────────────────────────────────────────────
 // Helpers
@@ -628,10 +617,6 @@ export interface ChunkedFetchOptions {
   rankToken?: string;
   /** Stable device identity — ensures every request uses the same UA + headers. */
   deviceProfile?: DeviceProfile;
-  /** Skip the /current_user/ warmup call (job already did it in a prior invocation). */
-  skipWarmup?: boolean;
-  /** Use extra-conservative pacing for first-ever snapshots. */
-  ultraSafe?: boolean;
 }
 
 export interface ChunkedFetchResult {
@@ -667,30 +652,17 @@ export async function fetchEdgeListChunked(
     maxPages = 80,
     rankToken: providedRankToken,
     deviceProfile,
-    skipWarmup = false,
-    ultraSafe = false,
   } = options;
 
-  // Ultra-safe mode: longer delays + lower page cap for first-ever snapshots.
-  const pageDelayMin     = ultraSafe ? 12_000 : PAGE_DELAY_MIN;
-  const pageDelayMax     = ultraSafe ? 18_000 : PAGE_DELAY_MAX;
-  const effectiveMaxPages = ultraSafe ? Math.min(maxPages, 30) : maxPages;
+  const pageDelayMin      = PAGE_DELAY_MIN;
+  const pageDelayMax      = PAGE_DELAY_MAX;
+  const effectiveMaxPages = maxPages;
 
   const deadline   = Date.now() + timeBudgetMs;
   const rankToken  = providedRankToken ?? newRankToken(igUserId);
   const edges: IgEdge[] = [];
   let nextMaxId    = startCursor;
   let page         = 0;
-
-  // Warmup: on fresh start (not resuming from a cursor), make a cheap profile
-  // request before hitting the friends list endpoint. Real Instagram app always
-  // fetches the current user profile before paginating friendships — skipping
-  // this cold jump onto the friendships API looks robotic.
-  // skipWarmup=true when the job already performed its warmup in a prior invocation.
-  if (!startCursor && !skipWarmup) {
-    await igGet(`${IG_API}/accounts/current_user/?edit=true`, cookie, deviceProfile);
-    await sleep(randomBetween(2_000, 4_000)); // natural navigation delay
-  }
 
   while (page < effectiveMaxPages) {
     // Time-budget check before each page fetch
@@ -737,9 +709,9 @@ export async function fetchEdgeListChunked(
     if (!nextMaxId) {
       const bigList = Boolean(result.body.big_list);
       if (bigList) {
-        // big_list retry: wait and re-request with a fresh token
+        // big_list retry: reuse the same short retry strategy as the rest of the active pipeline
         const freshToken = newRankToken(igUserId);
-        await sleep(randomBetween(ultraSafe ? 12_000 : 8_000, ultraSafe ? 18_000 : 12_000));
+        await sleep(randomBetween(pageDelayMin, pageDelayMax));
         const retryQs = new URLSearchParams({ count: String(randomPageSize()) });
         retryQs.set("rank_token", freshToken);
         const retryResult = await igGetWithRetry(
@@ -765,96 +737,6 @@ export async function fetchEdgeListChunked(
 
   console.warn(`[ig-chunked] ${direction}: maxPages (${effectiveMaxPages}) hit, stopped at ${edges.length}`);
   return { edges, nextCursor: nextMaxId, isComplete: false, pagesFetched: page, stopReason: "PAGE_LIMIT_REACHED", rankToken };
-}
-
-// ─────────────────────────────────────────────────────────────
-// Public entry point
-// ─────────────────────────────────────────────────────────────
-
-/**
- * Given a session cookie string and expected username, returns the
- * account's followers and following.
- *
- * Always resolves (never rejects). When stopped early,
- * meta.stopped_early === true and meta.stop_reason carries
- * a FailureCode you can look up in FAILURE_MODES for UI messaging.
- *
- * @param cookie   Full cookie string (sessionid=...; csrftoken=...)
- * @param username Expected @handle. Use "*" to skip username check.
- */
-export async function fetchUserList(
-  cookie: string,
-  username: string,
-): Promise<FetchResult> {
-  const fetchedAt = new Date().toISOString();
-
-  if (!cookie || !cookie.includes("sessionid=")) {
-    return emptyResult(fetchedAt, "SESSION_EXPIRED");
-  }
-
-  // Verify session and resolve ig_user_id
-  const profileResult = await getCurrentUserProfile(cookie);
-  if (!profileResult.ok) return emptyResult(fetchedAt, profileResult.failureCode);
-
-  const { profile } = profileResult;
-
-  // Username sanity check (pass "*" to skip)
-  if (username !== "*" && profile.username.toLowerCase() !== username.toLowerCase()) {
-    console.warn(`[ig] username mismatch: session is "${profile.username}", expected "${username}"`);
-    return emptyResult(fetchedAt, "USER_NOT_FOUND");
-  }
-
-  // Fetch both directions in parallel but stagger the start of the second
-  // by 8–12 s. This avoids a simultaneous page-1 burst (which triggers
-  // Instagram throttling) while keeping total runtime well under the 150 s
-  // Edge Function limit.
-  const [followersRes, followingRes] = await Promise.all([
-    fetchEdgeList(profile.ig_id, "followers", cookie),
-    sleep(randomBetween(DIRECTION_START_STAGGER_MIN, DIRECTION_START_STAGGER_MAX)).then(() =>
-      fetchEdgeList(profile.ig_id, "following", cookie)
-    ),
-  ]);
-
-  const stoppedEarly = !followersRes.isComplete || !followingRes.isComplete;
-  const stopReason: FailureCode | null = followersRes.stopReason ?? followingRes.stopReason ?? null;
-
-  return {
-    followers: followersRes.edges,
-    following: followingRes.edges,
-    meta: {
-      ig_user_id:              profile.ig_id,
-      username:                profile.username,
-      follower_count_api:      profile.follower_count,
-      following_count_api:     profile.following_count,
-      post_count_api:          profile.post_count,
-      follower_pages_fetched:  followersRes.pagesFetched,
-      following_pages_fetched: followingRes.pagesFetched,
-      is_followers_complete:   followersRes.isComplete,
-      is_following_complete:   followingRes.isComplete,
-      stopped_early:           stoppedEarly,
-      stop_reason:             stopReason,
-      fetched_at:              fetchedAt,
-    },
-  };
-}
-
-// ─────────────────────────────────────────────────────────────
-// Internal helper
-// ─────────────────────────────────────────────────────────────
-
-function emptyResult(fetchedAt: string, stopReason: FailureCode): FetchResult {
-  return {
-    followers: [],
-    following: [],
-    meta: {
-      ig_user_id: "", username: "",
-      follower_count_api: 0, following_count_api: 0, post_count_api: 0,
-      follower_pages_fetched: 0, following_pages_fetched: 0,
-      is_followers_complete: false, is_following_complete: false,
-      stopped_early: true, stop_reason: stopReason,
-      fetched_at: fetchedAt,
-    },
-  };
 }
 
 // ─────────────────────────────────────────────────────────────

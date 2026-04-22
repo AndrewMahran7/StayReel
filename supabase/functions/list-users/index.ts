@@ -29,7 +29,10 @@ type ListType =
   | "lost_followers"
   | "not_following_back"
   | "you_dont_follow_back"
-  | "you_unfollowed";
+  | "you_unfollowed"
+  | "followers"
+  | "following"
+  | "friends";
 
 const VALID_LIST_TYPES: ListType[] = [
   "new_followers",
@@ -37,7 +40,19 @@ const VALID_LIST_TYPES: ListType[] = [
   "not_following_back",
   "you_dont_follow_back",
   "you_unfollowed",
+  "followers",
+  "following",
+  "friends",
 ];
+
+/** List types served directly from the latest snapshot's raw JSON. */
+const SNAPSHOT_BACKED_TYPES = new Set<ListType>([
+  "not_following_back",
+  "you_dont_follow_back",
+  "followers",
+  "following",
+  "friends",
+]);
 
 interface IgEdge { ig_id: string; username: string; }
 
@@ -58,6 +73,11 @@ function toMap(edges: IgEdge[]): Map<string, IgEdge> {
 // Elements in `a` NOT present in `bMap`
 function setDiff(a: IgEdge[], bMap: Map<string, IgEdge>): IgEdge[] {
   return a.filter((e) => !bMap.has(edgeKey(e)));
+}
+
+// Elements in `a` ALSO present in `bMap` (intersection by key, preserving `a` order)
+function setIntersection(a: IgEdge[], bMap: Map<string, IgEdge>): IgEdge[] {
+  return a.filter((e) => bMap.has(edgeKey(e)));
 }
 
 Deno.serve(async (req: Request) => {
@@ -83,10 +103,12 @@ Deno.serve(async (req: Request) => {
 
     let allItems: IgEdge[] = [];
 
-    if (listType === "not_following_back" || listType === "you_dont_follow_back") {
-      // ── Reciprocity: ALWAYS compute from latest snapshot raw JSON ──
-      // Never use the stored diff columns for these — they become wrong
-      // if either snapshot was incomplete (partial fetch).
+    if (SNAPSHOT_BACKED_TYPES.has(listType)) {
+      // ── Latest snapshot raw JSON ──────────────────────
+      // followers, following, friends, and the two reciprocity lists are
+      // all derived from the most recent snapshot's followers_json and
+      // following_json. We never use stored diff columns for these because
+      // they go stale on every new snapshot.
       const { data: snap } = await adminClient()
         .from("follower_snapshots")
         .select("followers_json, following_json")
@@ -106,10 +128,24 @@ Deno.serve(async (req: Request) => {
         const followersMap = toMap(followers);
         const followingMap = toMap(following);
 
-        if (listType === "not_following_back") {
-          allItems = setDiff(following, followersMap); // you follow; they don't follow back
-        } else {
-          allItems = setDiff(followers, followingMap); // they follow you; you don't follow back
+        switch (listType) {
+          case "followers":
+            allItems = followers;
+            break;
+          case "following":
+            allItems = following;
+            break;
+          case "friends":
+            // Mutual followers: intersection of followers and following.
+            // O(followers + following) — sub-millisecond at 5k entries.
+            allItems = setIntersection(following, followersMap);
+            break;
+          case "not_following_back":
+            allItems = setDiff(following, followersMap); // you follow; they don't follow back
+            break;
+          case "you_dont_follow_back":
+            allItems = setDiff(followers, followingMap); // they follow you; you don't follow back
+            break;
         }
       }
     } else {

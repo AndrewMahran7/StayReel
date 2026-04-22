@@ -111,4 +111,28 @@ export function useNotifications(): void {
       }
     });
   }, []);
+
+  // ── Foreground notification received ────────────────────────
+  // When a snapshot milestone push arrives while the app is open, refresh
+  // the dashboard so the in-progress card and counts reflect the new state.
+  // This is the only "live update" path — there is no polling.
+  useEffect(() => {
+    const sub = Notifications.addNotificationReceivedListener((notification) => {
+      const data = notification.request.content.data as
+        Record<string, unknown> | undefined;
+      const milestone = data?.milestone as string | undefined;
+      const jobId     = data?.jobId     as string | undefined;
+      if (!milestone) return;
+      console.log('[useNotifications] Foreground notification received:', milestone, '| jobId:', jobId ?? 'none');
+
+      // Push the jobId into the store so dashboard reconciliation picks it up
+      // (covers the case where the user never taps the notification).
+      if (jobId) setPendingNotificationJobId(jobId);
+
+      qc.invalidateQueries({ queryKey: ['dashboard'] });
+      qc.invalidateQueries({ queryKey: ['list'] });
+      qc.invalidateQueries({ queryKey: ['snapshot-history'] });
+    });
+    return () => sub.remove();
+  }, []);
 }

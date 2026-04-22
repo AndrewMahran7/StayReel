@@ -164,57 +164,92 @@ export default function DashboardScreen() {
   const countdown      = useCountdown(nextAllowedAt);
   const isLimited      = countdown !== null;
 
-  // â”€â”€ Staged progress narrative â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-  // Maps real job phase data to a 4-stage human-readable flow.
-  // Every label is truthful â€” no stage claims completion before its time.
+  // ── Staged progress narrative ────────────────────────────────────
+  // Maps server-owned progress_percent + progress_stage to a 4-step UI flow.
+  // The only live values come from snapshot-start and reconciliation;
+  // there is no client polling.
   const stage = (() => {
     const p = capture.progress;
-    // Queued state: job is waiting for a concurrency slot â€” show an
-    // honest "waiting" stage instead of pretending to scan.
+
     if (p.queued) {
       return {
         step:     1,
         label:    'Queued',
-        headline: 'Waiting for an available slot\u2026',
-        subtitle: p.queueMessage ?? 'We\u2019ll start your snapshot automatically',
-        pct: 0.01,
+        headline: 'Waiting for an available slot…',
+        subtitle: p.queueMessage ?? 'We’ll start your snapshot automatically',
+        pct:      Math.max(0.01, p.percent / 100),
       };
     }
-    if (!p.phase) {
-      const isResuming = p.resumed;
-      return {
-        step:     1,
-        label:    isResuming ? 'Resuming'           : 'Connecting',
-        headline: isResuming ? 'Resuming snapshot\u2026' : 'Connecting to Instagram\u2026',
-        subtitle: isResuming
-          ? 'Carrying on from where your last scan paused'
-          : 'Establishing a secure session',
-        pct: 0.02,
-      };
+
+    const pct = Math.max(0.02, Math.min(p.percent / 100, 0.99));
+
+    switch (p.stage) {
+      case 'followers':
+        return {
+          step:     2,
+          label:    'Scanning',
+          headline: 'Scanning your followers…',
+          subtitle: `About ${p.percent}% complete · we’ll notify you when it’s done`,
+          pct,
+        };
+      case 'following':
+        return {
+          step:     3,
+          label:    'Comparing',
+          headline: 'Comparing relationships…',
+          subtitle: p.followingCached
+            ? 'Using your following list from earlier today ✓'
+            : `About ${p.percent}% complete · we’ll notify you when it’s done`,
+          pct,
+        };
+      case 'finalize':
+        return {
+          step:     4,
+          label:    'Building',
+          headline: 'Building your report…',
+          subtitle: 'Almost there…',
+          pct:      Math.max(0.95, pct),
+        };
+      case 'complete':
+        return { step: 4, label: 'Done', headline: 'Snapshot ready', subtitle: 'Pull to refresh if results aren’t showing yet.', pct: 1 };
+      case 'failed':
+      case 'reconnect_required':
+        return { step: 1, label: 'Stopped', headline: 'Snapshot stopped', subtitle: 'See details below.', pct: 0 };
+      case 'started':
+      default: {
+        const isResuming = p.resumed;
+        return {
+          step:     1,
+          label:    isResuming ? 'Resuming'           : 'Connecting',
+          headline: isResuming ? 'Resuming snapshot…' : 'Starting snapshot…',
+          subtitle: isResuming
+            ? 'Carrying on from where your last scan paused'
+            : 'We’ll notify you when it’s ready — you can close the app',
+          pct,
+        };
+      }
     }
-    if (p.phase === 'followers') {
-      const detail = p.followerCountApi > 0
-        ? `${p.followersSeen.toLocaleString()} of ~${p.followerCountApi.toLocaleString()} followers`
-        : `${p.followersSeen.toLocaleString()} followers so far`;
-      const pct = p.followerCountApi > 0 ? Math.min(0.55, (p.followersSeen / p.followerCountApi) * 0.55) : 0.15;
-      const subtitle = p.isFirstSnapshot
-        ? `${detail} \u00b7 First snapshots take a bit longer`
-        : p.etaLabel ? `${detail} \u00b7 ${p.etaLabel}` : detail;
-      return { step: 2, label: 'Scanning',  headline: 'Scanning your followers\u2026',  subtitle, pct: Math.max(0.05, pct) };
-    }
-    if (p.phase === 'following') {
-      const detail = p.followingCached ? 'Using cached following list \u2713' : `${p.followingSeen.toLocaleString()} following so far`;
-      const subtitle = p.isFirstSnapshot
-        ? `${detail} \u00b7 First snapshots take a bit longer`
-        : p.etaLabel ? `${detail} \u00b7 ${p.etaLabel}` : detail;
-      return { step: 3, label: 'Comparing', headline: 'Comparing relationships\u2026', subtitle, pct: p.followingCached ? 0.85 : 0.65 };
-    }
-    // finalize
-    return { step: 4, label: 'Building', headline: 'Building your report\u2026', subtitle: 'Almost there\u2026', pct: 0.95 };
   })();
 
   // When the last error requires reconnection, gate the snapshot button.
-  const needsReconnect = capture.error instanceof SnapshotError && RECONNECT_CODES.has(capture.error.code);
+  // ── Reconnect state derivation ─────────────────────────────────
+  // Server-driven tracking state from diffs-latest is the single source
+  // of truth. The client-side error-code check is a fallback for the brief
+  // window between a snapshot failure and the next dashboard refresh.
+  const serverDriven = (data?.tracking_state === 'tracking_paused_reconnect_required')
+    || (data?.reconnect_required === true);
+  const clientFallback = !serverDriven
+    && capture.error instanceof SnapshotError
+    && RECONNECT_CODES.has(capture.error.code);
+  const needsReconnect = serverDriven || clientFallback;
+
+  // Auto-clear capture error when it's a reconnect code — the reconnect
+  // banner handles UX instead of the error card.
+  useEffect(() => {
+    if (capture.error instanceof SnapshotError && RECONNECT_CODES.has(capture.error.code)) {
+      capture.clearError();
+    }
+  }, [capture.error]);
 
   // Clear override once the server confirms it's gone
   useEffect(() => {
@@ -269,27 +304,31 @@ export default function DashboardScreen() {
       switch (action.type) {
         case 'completed_while_away':
           capture.clearError();
+          capture.resetProgress();
+          capture.setIsPending(false);
           setCompletedWhileAway(true);
           setTimeout(() => setCompletedWhileAway(false), 6_000);
           break;
 
         case 'still_running':
         case 'still_queued':
-          // Server says the job is still active. Auto-resume the
-          // polling loop by calling mutateAsync, which will detect the
-          // existing running job via snapshot-start.
-          console.log('[dashboard] Reconciliation: auto-resuming job', action.jobId);
+          // Server says the job is still active. Sync local progress state
+          // so the dashboard renders the in-progress card without firing
+          // another snapshot-start request — the worker is already running
+          // server-side and will push a notification on completion.
+          console.log('[dashboard] Reconciliation: syncing in-progress job', action.jobId,
+            '— stage:', action.progressStage, '/ percent:', action.progressPercent);
           capture.clearError();
-          capture.mutateAsync().catch((err) => {
-            // The job likely completed between the reconciliation check
-            // and the startJob call â€” server returns a rate-limit error
-            // for the "new" snapshot since last_snapshot_at was just set.
-            // Clear the stale capture error and refresh dashboard data
-            // to reflect the completed job.
-            console.log('[dashboard] Auto-resume failed:', (err as Error).message, 'â€” clearing error & refetching');
-            capture.clearError();
-            refetch();
+          capture.setExternalProgress({
+            stage:           action.progressStage,
+            percent:         action.progressPercent,
+            queued:          action.type === 'still_queued',
+            queueMessage:    action.type === 'still_queued' ? 'Waiting for an available slot…' : null,
+            resumed:         true,
+            followingCached: action.type === 'still_running' ? action.followingCached : false,
           });
+          capture.setIsPending(true);
+          refetch();
           break;
 
         case 'failed':
@@ -439,6 +478,9 @@ export default function DashboardScreen() {
       not_following_back:   data.not_following_back_count   ?? 0,
       you_dont_follow_back: data.you_dont_follow_back_count ?? 0,
       you_unfollowed:       data.you_unfollowed_count       ?? 0,
+      followers:            data.follower_count             ?? 0,
+      following:            data.following_count            ?? 0,
+      friends:              data.mutual_count               ?? 0,
     };
     return map[key] ?? 0;
   };
@@ -504,7 +546,7 @@ export default function DashboardScreen() {
             {capturing || capture.isPending ? (
               <>
                 <ActivityIndicator size="small" color="#fff" />
-                <Text style={styles.captureBtnText}>{stage.label}\u2026</Text>
+                <Text style={styles.captureBtnText}>{stage.label}…</Text>
               </>
             ) : needsReconnect ? (
               <>
@@ -608,29 +650,6 @@ export default function DashboardScreen() {
             <View style={styles.progressBarBg}>
               <View style={[styles.progressBarFill, { width: `${Math.round(stage.pct * 100)}%` }]} />
             </View>
-
-            {/* Live confirmed "doesn't follow back" count â€” only visible once
-                followers phase is fully done and following scan has begun.
-                Stays hidden during followers phase â€” no speculative results. */}
-            {capture.progress.partialResultsReady && !capture.progress.queued && (
-              <View style={styles.partialNfbRow}>
-                <Ionicons
-                  name="person-outline"
-                  size={15}
-                  color={C.accent}
-                  style={{ marginRight: 8 }}
-                />
-                <Text style={styles.partialNfbText}>
-                  {capture.progress.partialNotFollowingBackCount > 0
-                    ? `Found ${capture.progress.partialNotFollowingBackCount} ${
-                        capture.progress.partialNotFollowingBackCount === 1 ? 'person' : 'people'
-                      } who ${
-                        capture.progress.partialNotFollowingBackCount === 1 ? "doesn\u2019t" : "don\u2019t"
-                      } follow you back so far`
-                    : 'Scanning who doesn\u2019t follow you back\u2026'}
-                </Text>
-              </View>
-            )}
 
             {/* cached following note */}
             {capture.progress.followingCached && (

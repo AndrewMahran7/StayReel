@@ -1,30 +1,10 @@
 /// <reference path="../deno-types.d.ts" />
 // capture-snapshot/index.ts
 //
-// POST /capture-snapshot
-// Body: { "ig_account_id": "<uuid>", "source": "manual" | "cron" }
-//
-// 1. Auth + ownership check.
-// 2. Cadence guard (minimum 6 hours between snapshots).
-// 3. Rate limit (manual: max 2/day; cron: no cap).
-// 4. Retrieve session cookie from Vault.
-// 5. Fetch followers + following via fetchUserList() — max 5 pages, backoff, challenge-aware.
-// 6. Write follower_snapshots row (counts + JSON blob + source + stop_reason).
-// 7. Write follower_edges rows (normalised, for set-diff queries).
-// 8. Compute diff vs. previous snapshot → write diffs row.
-// 9. Update ig_accounts.last_verified_at, status.
-// 10. Audit.
+// Legacy endpoint kept only as an explicit 410 response so old clients fail
+// fast without keeping an unused snapshot path alive in the codebase.
 
 import { corsPreflightResponse, jsonResponse } from "../_shared/cors.ts";
-import { errorResponse, Errors, AppError } from "../_shared/errors.ts";
-import { requireAuth, requireOwnsAccount } from "../_shared/auth.ts";
-import { adminClient } from "../_shared/supabase_client.ts";
-import { writeAuditEvent, extractIp } from "../_shared/audit.ts";
-import { checkAndEnforce24hLimit } from "../_shared/rate_limit.ts";
-import { fetchUserList, FAILURE_MODES } from "../_shared/instagram.ts";
-import { computeSnapshotDiff, IgEdge } from "../_shared/diff.ts";
-import { writeDiff, loadPreviousSnapshot } from "../_shared/diff_writer.ts";
-import { vaultRetrieve } from "../_shared/vault.ts";
 
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return corsPreflightResponse();
@@ -36,89 +16,6 @@ Deno.serve(async (req: Request) => {
     },
     410,
   );
-  // ─── Everything below is unreachable ──────────────────────
-  if (req.method !== "POST") {
-    return jsonResponse({ error: "Method not allowed" }, 405);
-  }
-
-  let userId: string | undefined;
-  let igAccountId: string | undefined;
-
-  try {
-    // ── 1. Auth ─────────────────────────────────────────────
-    const caller = await requireAuth(req);
-    userId = caller.userId;
-
-    // ── 2. Parse body ────────────────────────────────────────
-    let body: Record<string, unknown>;
-    try {
-      body = await req.json();
-    } catch {
-      throw Errors.badRequest("Request body must be valid JSON.");
-    }
-
-    igAccountId = String(body?.ig_account_id ?? "").trim();
-    const source = String(body?.source ?? "manual");
-
-    if (!igAccountId) throw Errors.badRequest("ig_account_id is required.");
-    if (!["manual", "cron", "onboarding"].includes(source)) {
-      throw Errors.badRequest("source must be manual | cron | onboarding");
-    }
-
-    // Ownership check (RLS-enforced read)
-    await requireOwnsAccount(caller.authHeader, igAccountId);
-
-    // ── 2. Daily snapshot limit (24h per account) ────────────
-    if (source === "manual") {
-      await checkAndEnforce24hLimit(userId, igAccountId);
-    }
-
-    // ── 4. Load IG account row ───────────────────────────────
-    const { data: igAccount, error: acctErr } = await adminClient()
-      .from("ig_accounts")
-      .select(
-        "id, ig_user_id, username, vault_secret_id, status, " +
-          "follower_count:follower_snapshots(follower_count, following_count, id)",
-      )
-      .eq("id", igAccountId)
-      .is("deleted_at", null)
-      .single();
-
-    if (acctErr || !igAccount) throw Errors.notFound("IG account");
-    // Cast away GenericStringError – client has no generated DB schema types
-    const acct = igAccount as unknown as {
-      id: string; ig_user_id: string; username: string;
-      vault_secret_id: string | null; status: string;
-    };
-    if (acct.status === "suspended") {
-      throw Errors.forbidden();
-    }
-
-    // ── 5. Retrieve session cookie from Vault ────────────────
-    if (!acct.vault_secret_id) {
-      throw Errors.igSessionInvalid();
-    }
-    const sessionCookie = await vaultRetrieve(acct.vault_secret_id);
-
-    // ── 6. Fetch followers + following via fetchUserList() ────
-    // Always resolves — partial results returned on early stop.
-    const igResult = await fetchUserList(sessionCookie, acct.username);
-    const { followers, following, meta: igMeta } = igResult;
-
-    const isListComplete = !igMeta.stopped_early;
-    const capturedAt    = igMeta.fetched_at;
-
-    // ── 7. Write follower_snapshots row ──────────────────────
-    // When the full list was fetched, the edge array is the source of truth.
-    // Only prefer the API-reported count when the capture was partial (early
-    // stop) — the API count is accurate for the total while the edge array
-    // is incomplete.
-    const followerCount  = isListComplete
-      ? followers.length
-      : Math.max(igMeta.follower_count_api  ?? 0, followers.length);
-    const followingCount = isListComplete
-      ? following.length
-      : Math.max(igMeta.following_count_api ?? 0, following.length);
 
     // Mutual count: users present in both followers and following
     const followerKeySet = new Set(

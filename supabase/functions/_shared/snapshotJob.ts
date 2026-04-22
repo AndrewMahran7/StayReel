@@ -58,7 +58,7 @@ const TIME_BUDGET_MS          = 75_000;
  *  big_list accounts return ~20 users/page, so 45 pages ≈ 900 followers. */
 const MAX_PAGES_PER_INVOCATION = 45;
 /** Minimum remaining time (ms) to auto-advance to the next phase in the same call. */
-const ADVANCE_THRESHOLD_MS    = 15_000;
+const ADVANCE_THRESHOLD_MS    = 6_000;
 
 // ── ETA estimation ────────────────────────────────────────────────────────────
 
@@ -172,6 +172,22 @@ export interface SnapshotJobRow {
   locked_by: string | null;
   lock_acquired_at: string | null;
   last_heartbeat_at: string | null;
+  // Server-owned lifecycle fields (030_server_owned_snapshot_lifecycle)
+  next_run_at: string | null;
+  progress_percent: number;
+  progress_stage: string;
+  progress_mode: string;
+  completed_work_units: number;
+  total_work_units: number;
+  followers_target_count: number | null;
+  following_target_count: number | null;
+  following_cached: boolean;
+  notification_mask: number;
+  last_notified_percent: number;
+  last_chunk_started_at: string | null;
+  last_chunk_completed_at: string | null;
+  worker_attempt_count: number;
+  consecutive_retry_count: number;
 }
 
 export interface ChunkResult {
@@ -337,8 +353,7 @@ export async function runSnapshotChunk(
     ? { ua: job.device_ua, deviceId: job.device_id ?? "", androidId: job.android_id ?? "" }
     : undefined;
 
-  // Ultra-safe mode uses a lower page cap for first-ever snapshots.
-  const safeMaxPages = job.is_first_snapshot ? 20 : MAX_PAGES_PER_INVOCATION;
+  const safeMaxPages = MAX_PAGES_PER_INVOCATION;
 
   // Helper: how many ms remain in this invocation's budget.
   const remaining = () => TIME_BUDGET_MS - (Date.now() - invocationStart);
@@ -358,12 +373,10 @@ export async function runSnapshotChunk(
   ) => makeResult(job.id, status, p, pd, fs, fws, done, msg, fwc, job.follower_count_api, job.following_count_api, job.is_first_snapshot, eta);
 
   // ── Auth precheck ────────────────────────────────────────────────────────
-  // Before doing any Instagram API work, verify the session is still alive.
-  // This avoids wasting time paginating with a dead cookie. The precheck
-  // is cheap (single /current_user/ call) and catches expired sessions
-  // before any pagination begins.
-  // Skip precheck during finalize — no IG API calls needed in that phase.
-  if (phase !== "finalize") {
+  // Validate once at job start, not on every resumed invocation. Once a job
+  // has made progress, the page fetch itself will surface auth failures and
+  // the existing partial-progress + reconnect flow will handle them.
+  if (phase !== "finalize" && job.pages_done === 0) {
     const precheckFailure = await precheckSession(cookie, deviceProfile);
     if (precheckFailure) {
       const category = classifyFetchFailure(precheckFailure);
@@ -400,8 +413,6 @@ export async function runSnapshotChunk(
       timeBudgetMs: remaining() - 5_000,  // 5 s margin for DB writes
       maxPages:     safeMaxPages,
       deviceProfile,
-      skipWarmup:   job.warmup_done,
-      ultraSafe:    job.is_first_snapshot,
     });
 
     followers    = deduplicateEdges([...followers, ...result.edges]);
@@ -442,7 +453,6 @@ export async function runSnapshotChunk(
       followers_cursor: followersPhaseDone ? null : followersCursor,
       phase:            followersPhaseDone ? "following" : "followers",
       pages_done:       pagesDone,
-      warmup_done:      true,
       updated_at:       new Date().toISOString(),
     }).eq("id", job.id);
 
@@ -488,8 +498,6 @@ export async function runSnapshotChunk(
         timeBudgetMs: remaining() - 5_000,
         maxPages:     safeMaxPages,
         deviceProfile,
-        skipWarmup:   true,  // warmup already done during followers phase
-        ultraSafe:    job.is_first_snapshot,
       });
 
       following    = deduplicateEdges([...following, ...result.edges]);
@@ -527,7 +535,6 @@ export async function runSnapshotChunk(
         following_cursor: followingPhaseDone ? null : followingCursor,
         phase:            followingPhaseDone ? "finalize" : "following",
         pages_done:       pagesDone,
-        warmup_done:      true,
         updated_at:       new Date().toISOString(),
       }).eq("id", job.id);
 

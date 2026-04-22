@@ -13,7 +13,10 @@ export type ListType =
   | 'lost_followers'
   | 'not_following_back'
   | 'you_dont_follow_back'
-  | 'you_unfollowed';
+  | 'you_unfollowed'
+  | 'followers'
+  | 'following'
+  | 'friends';
 
 export interface IgUser {
   ig_id:    string;

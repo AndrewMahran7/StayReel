@@ -35,9 +35,15 @@ const UPSELL_COPY: Record<ListType, { headline: string; subtitle: string }> = {
   not_following_back:   { headline: "See who doesn't follow you back",   subtitle: 'Stop giving follows that are never returned.'       },
   you_dont_follow_back: { headline: 'See all your secret fans',          subtitle: 'Discover followers you haven\u2019t followed back.' },
   you_unfollowed:       { headline: 'See your full unfollow history',    subtitle: 'Track every account you\u2019ve removed.'            },
+  followers:            { headline: 'See your full follower list',       subtitle: 'Browse every account that follows you.'             },
+  following:            { headline: 'See everyone you follow',           subtitle: 'Browse every account in your following list.'       },
+  friends:              { headline: 'See all your mutual friends',       subtitle: 'You follow each other — see the full list.'         },
 };
 
 const TABS: { key: ListType; label: string }[] = [
+  { key: 'followers',            label: 'Followers' },
+  { key: 'following',            label: 'Following' },
+  { key: 'friends',              label: 'Friends'   },
   { key: 'new_followers',        label: 'New'       },
   { key: 'lost_followers',       label: 'Lost'      },
   { key: 'not_following_back',   label: 'Ghost'     },
@@ -270,9 +276,11 @@ export default function ListsScreen() {
               <Text style={styles.emptyText}>
                 {search.trim()
                   ? 'No matching users'
-                  : ['new_followers','lost_followers','you_unfollowed'].includes(activeType)
-                    ? 'Take a second snapshot to see changes'
-                    : 'Nothing here yet'}
+                  : ['followers','following','friends'].includes(activeType)
+                    ? 'Take a snapshot to see your list'
+                    : ['new_followers','lost_followers','you_unfollowed'].includes(activeType)
+                      ? 'Take a second snapshot to see changes'
+                      : 'Nothing here yet'}
               </Text>
             </View>
           ) : null

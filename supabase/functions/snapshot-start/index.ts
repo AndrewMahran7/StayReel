@@ -21,8 +21,30 @@ import { checkAndEnforce24hLimit, countRunningJobs, MAX_CONCURRENT_JOBS, QUEUED_
 import { getIgCurrentUser, assignDeviceProfile, DeviceProfile } from "../_shared/instagram.ts";
 import { vaultRetrieve }                       from "../_shared/vault.ts";
 import { writeAuditEvent, extractIp }          from "../_shared/audit.ts";
-import { runSnapshotChunk, SnapshotJobRow }    from "../_shared/snapshotJob.ts";
+import { SnapshotJobRow }                      from "../_shared/snapshotJob.ts";
+import { initialiseProgressTargets }           from "../_shared/snapshotProgress.ts";
+import { sendMilestoneNotification }           from "../_shared/snapshotNotifications.ts";
 import { notifyOwnerOfError }                  from "../_shared/notify.ts";
+
+/** Fire-and-forget invocation of the server-owned snapshot-worker. */
+function triggerSnapshotWorker(jobId: string): void {
+  const url       = (Deno.env.get("SUPABASE_URL") ?? "") + "/functions/v1/snapshot-worker";
+  const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+  if (!url || !serviceKey) {
+    console.warn("[snapshot-start] missing SUPABASE_URL or service-role key; cannot trigger worker");
+    return;
+  }
+  fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type":  "application/json",
+      "Authorization": `Bearer ${serviceKey}`,
+    },
+    body: JSON.stringify({ job_id: jobId }),
+  }).catch((err) => {
+    console.warn(`[snapshot-start] worker trigger failed for job=${jobId}:`, (err as Error).message);
+  });
+}
 
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return corsPreflightResponse();
@@ -96,21 +118,19 @@ Deno.serve(async (req: Request) => {
 
     if (existingJob) {
       const j = existingJob as unknown as SnapshotJobRow;
+      // Server-owned model: ensure the worker is running for this job. The
+      // call is idempotent (claimJobLock fails fast if already running) so it's
+      // safe to fire on every resume request.
+      triggerSnapshotWorker(j.id);
       return jsonResponse({
         jobId:            j.id,
         status:           j.status,
         phase:            j.phase,
-        pagesDone:        j.pages_done,
-        followersSeen:    (j.followers_json as unknown[]).length,
-        followingSeen:    (j.following_json as unknown[]).length,
-        followerCountApi: j.follower_count_api,
-        followingCountApi:j.following_count_api,
-        done:             false,
-        message:          j.status === "queued" ? "Waiting for an available slot…" : "Resuming existing job…",
+        progress_percent: j.progress_percent ?? 0,
+        progress_stage:   j.progress_stage ?? "started",
+        followingCached:  j.following_cached,
         resumed:          j.status === "running",
-        isFirstSnapshot:  j.is_first_snapshot,
-        etaMs:            null,
-        followingCached:  (j.following_json as unknown[]).length > 0,
+        message:          j.status === "queued" ? "Waiting for an available slot…" : "Resuming existing job…",
       });
     }
 
@@ -258,42 +278,54 @@ Deno.serve(async (req: Request) => {
 
     const job = jobRow as unknown as SnapshotJobRow;
 
-    // ── 9. Queued path: return immediately, no chunk work ─────
-    // snapshot-continue will promote this job when a slot opens.
-    if (isQueued) {
-      return jsonResponse({
-        jobId:            job.id,
-        status:           "queued",
-        phase:            job.phase,
-        pagesDone:        0,
-        followersSeen:    0,
-        followingSeen:    0,
-        followerCountApi: job.follower_count_api,
-        followingCountApi:job.following_count_api,
-        done:             false,
-        message:          "Waiting for an available slot…",
-        resumed:          false,
-        isFirstSnapshot:  isFirstSnapshot,
-        etaMs:            null,
-        followingCached:  cachedFollowing.length > 0,
-      });
-    }
+    // ── 9. Initialise server-owned progress + scheduling ─────
+    // Targets come from the IG profile counts. If we have a cached following
+    // list (24h) we mark following_cached=true so progress doesn't account for
+    // a phase that will be skipped.
+    const followingCached = cachedFollowing.length > 0;
+    await initialiseProgressTargets(
+      adminClient(),
+      job.id,
+      profile.follower_count ?? 0,
+      profile.following_count ?? 0,
+      followingCached,
+    );
+    await adminClient().from("snapshot_jobs")
+      .update({ next_run_at: new Date().toISOString() })
+      .eq("id", job.id);
 
-    // ── 10. Run first chunk ───────────────────────────────────
-    const result = await runSnapshotChunk(job, cookie, profile.ig_id);
-
-    // ── 11. Audit ─────────────────────────────────────────────
+    // ── 10. Audit ────────────────────────────────────────────
     await writeAuditEvent({
       userId,
       igAccountId,
       eventType: "snapshot_taken",
-      payload: { job_id: job.id, phase: result.phase, source },
+      payload: { job_id: job.id, source, status: initialStatus },
       ipAddress: extractIp(req),
     }).catch(() => {});
 
-    // Merge followingCached into the response so the app knows from the
-    // very first response whether the following list will be served from cache.
-    return jsonResponse({ ...result, followingCached: cachedFollowing.length > 0 });
+    // ── 11. Send STARTED milestone push (idempotent). ────────
+    // Fire-and-forget: the user receives this even if the worker self-trigger
+    // is delayed.
+    void sendMilestoneNotification(adminClient(), job.id, userId, igAccountId, "STARTED");
+
+    // ── 12. Trigger the server-owned worker (fire-and-forget). ────
+    // For queued jobs the worker will detect the queued state and either
+    // promote-to-running or wait for a slot.
+    triggerSnapshotWorker(job.id);
+
+    // ── 13. Return immediately — the client should disconnect. ────
+    return jsonResponse({
+      jobId:            job.id,
+      status:           initialStatus,
+      phase:            job.phase,
+      progress_percent: 0,
+      progress_stage:   "started",
+      followingCached,
+      resumed:          false,
+      message:          isQueued
+        ? "Waiting for an available slot…"
+        : "Snapshot started — you'll get a notification when it's ready.",
+    });
 
   } catch (err) {
     const code    = err instanceof AppError ? err.code : "INTERNAL_ERROR";
